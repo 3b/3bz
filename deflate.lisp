@@ -153,13 +153,16 @@
   (declare (type (unsigned-byte 15) x))
   (ldb (byte bits (- 15 bits)) (aref *bit-rev-table* x)))
 
-(defun build-tree-part (tree table tree-offset type)
+(defun build-tree-part (tree tree-offset table type start end)
+  (declare (type fixnum tree-offset start end)
+           (type code-table-type table))
   ;; # of entries of each bit size
   (declare (optimize speed))
   (let* ((counts (let ((a (make-array 16 :element-type '(unsigned-byte 11)
                                          :initial-element 0)))
-                   (map nil (lambda (i) (when (plusp i) (incf (aref a i))))
-                        table)
+                   (loop for x from start below end
+                         for i = (aref table x)
+                         when (plusp i) do (incf (aref a i)))
                    a))
          ;; first position of each used bit size
          (offsets (let ((c 0))
@@ -192,7 +195,8 @@
     ;; sort table/allocate codes
     (loop with offset-tmp = (copy-seq offsets)
           for i fixnum from 0
-          for l across table
+          for to fixnum from start below end
+          for l = (aref table to)
           for nodes of-type (simple-array (unsigned-byte 16) 1)
             = (ht-nodes terminals)
           for o = (aref offset-tmp l)
@@ -217,6 +221,7 @@
 
     ;; fill tree:
     (let ((next-subtable tree-offset))
+      (declare (type (unsigned-byte 12) next-subtable))
       (labels ((next-len (l)
                  (position-if 'plusp counts :start l))
                (subtable (prefix prefix-bits)
@@ -232,6 +237,7 @@
                         else
                           return (let ((start next-subtable)
                                        (b  (- entry-bits prefix-bits)))
+                                   (declare (type (unsigned-byte 16) b))
                                    (incf next-subtable (expt 2 b))
                                    (loop for i below (expt 2 b)
                                          do (setf (aref (ht-nodes tree)
@@ -247,13 +253,29 @@
       (values next-subtable min))))
 
 (defun build-tree (tree lit/len dist)
-  (declare (optimize speed))
+  (declare (optimize speed)
+           (type code-table-type lit/len dist))
   (multiple-value-bind (count bits)
-      (build-tree-part tree lit/len 0 :lit/len)
+      (build-tree-part tree 0 lit/len :lit/len 0 (length lit/len))
     (setf (ht-len-start-bits tree) bits)
     (setf (ht-dist-offset tree) count)
     (setf (ht-dist-start-bits tree)
-          (nth-value 1 (build-tree-part tree dist count :dist)))))
+          (nth-value 1 (build-tree-part tree count dist :dist
+                                        0 (length dist))))))
+
+(defun build-tree* (tree lit/len/dist mid end)
+  (declare (optimize speed)
+           (type (vector (unsigned-byte 4)) lit/len/dist)
+           (type (and unsigned-byte fixnum) mid))
+  (multiple-value-bind (count bits)
+      (build-tree-part tree 0 lit/len/dist :lit/len 0 mid)
+    (setf (ht-len-start-bits tree) bits)
+    (setf (ht-dist-offset tree) count)
+    (setf (ht-dist-start-bits tree)
+          (nth-value 1 (build-tree-part tree count
+                                        lit/len/dist :dist
+                                        mid end)))
+    #++(dump-tree tree)))
 
 (defun dump-tree (tree &key bits base (depth 0))
   (cond
@@ -336,18 +358,18 @@
   (output-buffer (make-array 65536 :element-type '(unsigned-byte 8)))
   (output-index 0 :type (unsigned-byte 16))
   ;; dynamic huffman tree parameters being read
-  (dht-hlit 0 :type (unsigned-byte 10))
-  (dht-hdist 0 :type octet)
+  (dht-hlit 0 :type  (unsigned-byte 10))
+  (dht-hlit+hdist 0 :type (unsigned-byte 10))
   (dht-hclen 0 :type octet)
   (dht-len-code-index 0 :type octet)
   (dht-len-codes (make-array 20 :element-type '(unsigned-byte 4)
                                 :initial-element 0)
    :type code-table-type)
   (dht-len-tree (make-huffman-tree)) ;; fixme: reduce size
-  (dht-lit/len (make-array 288 :element-type '(unsigned-byte 4)
-                               :initial-element 0 :fill-pointer 0))
-  (dht-dist (make-array 32 :element-type '(unsigned-byte 4)
-                           :initial-element 0 :fill-pointer 0))
+  (dht-lit/len/dist (make-array (+ 288 32) :element-type '(unsigned-byte 4)
+                                           :initial-element 0)
+   :type code-table-type)
+  (dht-lit/len/dist-index 0 :type (mod 320))
   (dht-last-len 0 :type octet)
 ;;; bitstream state:
   ;; # of bits remaining to read if read was interrupted
@@ -529,16 +551,12 @@
                        (setf (ds-output-index state) d))))
                  (store-dht (v)
                    (cond
-                     ((plusp (ds-dht-hlit state))
-                      #++(format *debug-io* "$$lit/len ~s (~s)~%"
-                                 v (ds-dht-hlit state))
-                      (vector-push v (ds-dht-lit/len state))
-                      (decf (ds-dht-hlit state)))
-                     ((plusp (ds-dht-hdist state))
-                      #++(format *debug-io* "$$dist ~s (~s)~%"
-                                 v (ds-dht-hdist state))
-                      (vector-push v (ds-dht-dist state))
-                      (decf (ds-dht-hdist state)))
+                     ((plusp (ds-dht-hlit+hdist state))
+                      (setf (aref (ds-dht-lit/len/dist state)
+                                  (ds-dht-lit/len/dist-index state))
+                            v)
+                      (incf (ds-dht-lit/len/dist-index state))
+                      (decf (ds-dht-hlit+hdist state)))
                      (t
                       (error "???"))))
                  (repeat-dht (c)
@@ -562,7 +580,7 @@
             (let ((s (bits 16 (error "foo3")))
                   (n (the (unsigned-byte 16) (bits 16 (error "foo4")))))
               (assert (= n (ldb (byte 16 0) (lognot s))))
-              (format *debug-io* "uncompressed ~s (~s)~%" s n)
+              #++(format *debug-io* "uncompressed ~s (~s)~%" s n)
               (loop repeat s
                     do (out-byte (the octet (bits 8 (error "5"))))))
             (next-state :block-end)
@@ -574,10 +592,13 @@
 
             :dynamic-huffman-block
             (setf (ds-dht-hlit state) (+ 257 (bits 5 (error "dhb1"))))
-            (setf (fill-pointer (ds-dht-lit/len state)) 0)
+            #++(format t "hlit = ~s~%" (ds-dht-hlit state))
             :dynamic-huffman-block2
-            (setf (ds-dht-hdist state) (+ 1 (bits 5 (error "dhb2"))))
-            (setf (fill-pointer (ds-dht-dist state)) 0)
+            (let ((hdist (+ 1 (bits 5 (error "dhb2")))))
+              (setf (ds-dht-hlit+hdist state)
+                    (+ (ds-dht-hlit state)
+                       hdist)))
+            (setf (ds-dht-lit/len/dist-index state) 0)
             :dynamic-huffman-block3
             (setf (ds-dht-hclen state) (+ 4 (bits 4 (error "dhb3"))))
             (fill (ds-dht-len-codes state) 0)
@@ -591,9 +612,9 @@
                      (decf (ds-dht-hclen state)))
             (setf (ht-len-start-bits (ds-dht-len-tree state))
                   (nth-value 1
-                             (build-tree-part (ds-dht-len-tree state)
+                             (build-tree-part (ds-dht-len-tree state) 0
                                               (ds-dht-len-codes state)
-                                              0 :dht-len)))
+                                              :dht-len 0 20)))
             #++(format *debug-io*
                        "build dht len tree: ~s~%"  (ds-dht-len-codes state))
             #++(dump-tree (ds-dht-len-tree state))
@@ -603,9 +624,10 @@
             (next-state :decode-huffman-entry)
 
             :dynamic-huffman-block4
-            (build-tree (ds-dynamic-huffman-tree state)
-                        (ds-dht-lit/len state)
-                        (ds-dht-dist state))
+            (build-tree* (ds-dynamic-huffman-tree state)
+                         (ds-dht-lit/len/dist state)
+                         (ds-dht-hlit state)
+                         (ds-dht-lit/len/dist-index state))
             (setf (ds-extra-bits-type state) 0)
             (setf (ds-current-huffman-tree state)
                   (ds-dynamic-huffman-tree state))
@@ -681,8 +703,7 @@
             #++(format *debug-io* "  ~s ~s~%"
                        (ds-dht-hlit state)
                        (ds-dht-hdist state))
-            (if (or (plusp (ds-dht-hlit state))
-                    (plusp (ds-dht-hdist state)))
+            (if (plusp (ds-dht-hlit+hdist state))
                 (next-state :decode-huffman-entry)
                 (progn
                   (setf (ds-extra-bits-type state) 0)

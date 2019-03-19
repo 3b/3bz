@@ -47,13 +47,18 @@
                              :octet-vector octets
                              :boxes (make-context-boxes :end (length octets))))
            (state (make-deflate-state))
-           (d (with-output-to-string (*standard-output*)
+           (d #++(with-output-to-string (*standard-output*)
                 (decompress c state)
                 #++(loop for b = (read-struct 'deflate-block c)
                          when (data b)
                            do (loop for a across (data b)
                                     do (format s "~2,'0x" a))
-                         until (plusp (bfinal b))))))
+                         until (plusp (bfinal b))))
+              (let ((d1 (decompress c state)))
+                (with-output-to-string (s)
+                  (loop for v in d1
+                        do (loop for x across v
+                                 do (format s "~2,'0x" x)))))))
       (format t "got <~a>~%" d)
       (format t "expected <~a>~%" out)
       (unless err (assert (string= d out))))))

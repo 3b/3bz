@@ -534,15 +534,63 @@
                                                  offset)))))
                      (out-byte x)))
                  (copy-history (n)
+                   (declare (type fixnum n))
                    (let ((o (ds-history-copy-offset state)))
                      #++(loop repeat n do (copy-history-byte o))
                      (let* ((d (ds-output-index state))
-                            (s (ldb (byte 16 0) (- d o))))
-                       (declare (type (unsigned-byte 16)  d s))
-                       (loop repeat n
-                             do (setf (aref output d) (aref output s))
-                                (setf d (ldb (byte 16 0) (1+ d)))
-                                (setf s (ldb (byte 16 0) (1+ s))))
+                            (s (ldb (byte 16 0) (- d o)))
+                            (n1 n)
+                            (e (- 65536 n 8)))
+                       (declare (type (unsigned-byte 16) d s))
+                       ;; if either range overlaps end of ring buffer,
+                       ;; copy by bytes until neither overlaps
+                       (when (or (>= s e)
+                                 (>= d e))
+                         (loop until (zerop n)
+                               until (and (< s e)
+                                          (< d e))
+                               do (setf (aref output d) (aref output s))
+                                  (setf d (ldb (byte 16 0) (1+ d)))
+                                  (setf s (ldb (byte 16 0) (1+ s)))
+                                  (decf n)))
+                       ;; we are copying in a 64k ring buffer and
+                       ;; deflate is limited to copying 258 bytes from
+                       ;; at most 32k away. If we copy a few bytes too
+                       ;; much it won't overwrite anything important,
+                       ;; so just copy by largest word size we can.
+                       ;; (word size is limited by offset, since it
+                       ;; has to copy results of previous copies if it
+                       ;; overlaps, unlike REPLACE)
+                       (cond
+                         ((>= o 8)
+                          (loop repeat (ceiling n 8)
+                                do (setf (nibbles:ub64ref/le output d)
+                                         (nibbles:ub64ref/le output s))
+                                   (setf d (ldb (byte 16 0) (+ d 8)))
+                                   (setf s (ldb (byte 16 0) (+ s 8)))))
+                         ((>= o 4)
+                          (loop repeat (ceiling n 4)
+                                do (setf (nibbles:ub32ref/le output d)
+                                         (nibbles:ub32ref/le output s))
+                                   (setf d (ldb (byte 16 0) (+ d 4)))
+                                   (setf s (ldb (byte 16 0) (+ s 4)))))
+                         ((>= o 2)
+                          (loop repeat (ceiling n 2)
+                                do (setf (nibbles:ub16ref/le output d)
+                                         (nibbles:ub16ref/le output s))
+                                   (setf d (ldb (byte 16 0) (+ d 2)))
+                                   (setf s (ldb (byte 16 0) (+ s 2)))))
+                         (t
+                          (loop repeat n
+                                do (setf (aref output d)
+                                         (aref output s))
+                                   (setf d (ldb (byte 16 0) (1+ d)))
+                                   (setf s (ldb (byte 16 0) (1+ s))))))
+                       ;; D may be a bit past actual value, so reset
+                       ;; to correct end point
+                       (setf d (ldb (byte 16 0)
+                                    (+ (ds-output-index state) n1)))
+                       ;; copy to output buffer if needed
                        (if (< d (ds-output-index state))
                            (copy-output 32768 65536)
                            (when (and (< (ds-output-index state) 32768)

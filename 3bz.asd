@@ -1,6 +1,6 @@
 (defsystem :3bz
   :description "deflate decompressor"
-  :depends-on (cffi alexandria mmap)
+  :depends-on (cffi alexandria mmap nibbles)
   :serial t
   :license "MIT"
   :author "Bart Botta <00003b at gmail.com>"

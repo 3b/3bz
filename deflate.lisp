@@ -183,14 +183,12 @@
                                   (setf c (ash (+ c a) 1))))
                               counts)))
          ;; range of bit sizes used
-         (min (or (position-if-not 'zerop counts) 15))
-         (max (or (position-if-not 'zerop counts :from-end t) 0))
+         (min (position-if-not 'zerop counts))
          ;; temp space for sorting table
          (terminals (make-huffman-tree)))
-    (declare (type (unsigned-byte 4) min max)
-             (ignorable max)
+    (declare (type (or null (unsigned-byte 4)) min)
              (type (simple-array (unsigned-byte 11) (16)) counts))
-    (when (zerop max)
+    (unless min
       (return-from build-tree-part (values 0 0)))
     ;; sort table/allocate codes
     (loop with offset-tmp = (copy-seq offsets)

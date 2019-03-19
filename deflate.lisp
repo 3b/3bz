@@ -371,8 +371,9 @@
                      (decf (ds-bits-remaining ,',state) ,n)
                      (setf (ds-partial-bits ,',state)
                            (ash (ds-partial-bits ,',state) (- ,n))))))
-              ;; try to get more bits from source
-              (try-read-bits (bits interrupt-form)
+              ;; try to get more bits from source (only called when
+              ;; there aren't enough already read)
+              (%try-read-bits (bits interrupt-form)
                 (with-gensyms (tmp n o r octet)
                   `(let ((,tmp 0)
                          (,n ,bits)
@@ -384,37 +385,45 @@
                                 (ds-bits-remaining ,',state)
                                 (ds-partial-bits ,',state))
                      (flet ((int ()
-                              ;; if we ran out of input, store state
+                              ;; if we ran out of input, store what we
+                              ;; have so we can try again later
                               (setf (ds-bits-remaining ,',state) ,o
                                     (ds-partial-bits ,',state) ,tmp)
                               ;; and let caller decide what to do next
                               ,interrupt-form))
+                       ;; we had some partial input, so start with that
                        (when (plusp (ds-bits-remaining ,',state))
                          #++(format *debug-io* " used remaining ~s ~8,'0b~%"
                                     (ds-bits-remaining ,',state)
                                     (ds-partial-bits ,',state))
                          (setf ,tmp (ds-partial-bits ,',state))
                          (setf ,o (ds-bits-remaining ,',state)))
-                       (loop while (>= (- ,n ,o) 8)
-                             for ,octet = (octet (int))
-                             do (setf (ldb (byte 8 ,o) ,tmp) ,octet
-                                      ,o (+ ,o 8))
-                             #++(format *debug-io* " read octet, @~s/~s ~16,'0b~%"
-                                        ,o ,n ,tmp))
-                       (if (< ,o ,n)
-                           (let ((,octet (octet (int)))
-                                 (,r (- ,n ,o)))
-                             (declare (type octet ,octet))
-                             (assert (plusp ,r))
-                             #++(format *debug-io* " leftovers, @~s/~s ~16,'0b~%"
-                                        ,o ,n ,tmp)
-                             (setf (ldb (byte ,r ,o),tmp)
-                                   (ldb (byte ,r 0) ,octet))
-                             (setf (ds-partial-bits ,',state)
-                                   (ash ,octet (- ,r)))
-                             (setf (ds-bits-remaining ,',state)
-                                   (- 8 ,r)))
-                           (setf (ds-bits-remaining ,',state) 0)))
+                       ;; we only support up to 16bit values, so just
+                       ;; hard code 2 tries to read more bits
+                       (let ((,octet 0)
+                             (,r (- ,n ,o)))
+                         (declare (type (unsigned-byte 5) ,r)
+                                  (type octet ,octet))
+                         ;; we need at least 1 octet, so try to
+                         ;; consume it directly
+                         (when (>= ,r 8)
+                           (setf ,octet (octet (int)))
+                           (setf (ldb (byte 8 ,o) ,tmp) ,octet)
+                           (incf ,o 8)
+                           (decf ,r 8))
+                         ;; we need at least 1 bit and less than an
+                         ;; octet (or we tried to read more than 16
+                         ;; bits), so try to consume part of an octet
+                         (when (plusp ,r)
+                           (setf ,octet (octet (int)))
+                           (setf (ldb (byte ,r ,o) ,tmp) ,octet))
+                         (if (or (zerop ,r) (= ,r 8))
+                             ;; used up entire octet
+                             (setf (ds-bits-remaining ,',state) 0)
+                             ;; used up partial octet
+                             (setf (ds-bits-remaining ,',state) (- 8 ,r)
+                                   (ds-partial-bits ,',state)
+                                   (ash ,octet (- ,r))))))
                      #++(format *debug-io* " -> ~4,'0x ~16,'0b~%" ,tmp ,tmp)
                      ,tmp)))
               (bits (n interrupt-form)
@@ -422,7 +431,7 @@
                    (assert (plusp ,n))
                    (if (>= (ds-bits-remaining ,',state) ,n)
                        (%use-partial-bits ,n)
-                       (try-read-bits ,n ,interrupt-form))))
+                       (%try-read-bits ,n ,interrupt-form))))
               (byte-align ()
                 `(setf (ds-bits-remaining ,',state) 0)))
      ,@body))

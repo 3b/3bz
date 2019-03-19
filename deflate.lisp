@@ -603,7 +603,7 @@
             (setf (ds-tree-offset state) 0)
             :decode-huffman-entry2
             ;; fixme: build table reversed instead of reversing bits
-            (let* ((bits  (bits (ds-tree-bits state) (error "6")))
+            (let* ((bits (bits (ds-tree-bits state) (error "6")))
                    (node (aref (ht-nodes (ds-current-huffman-tree state))
                                (+ bits (ds-tree-offset state)))))
               #++(format *debug-io* "got ~d bits ~16,'0b -> node ~16,'0b~%"

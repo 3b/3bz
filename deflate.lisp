@@ -90,14 +90,14 @@
 
 (defun ht-invalid-node () #xffff)
 (defun ht-end-node () #x0001)
-
-(defstruct (huffman-tree (:conc-name ht-))
-  (len-start-bits 0 :type ht-bit-count-type)
-  (dist-start-bits 0 :type ht-bit-count-type)
-  (dist-offset 0 :type ht-offset-type)
-  (nodes (make-array +max-tree-size+ :element-type 'ht-node-type
-                                     :initial-element (ht-invalid-node))
-   :type ht-node-array-type))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defstruct (huffman-tree (:conc-name ht-))
+    (len-start-bits 0 :type ht-bit-count-type)
+    (dist-start-bits 0 :type ht-bit-count-type)
+    (dist-offset 0 :type ht-offset-type)
+    (nodes (make-array +max-tree-size+ :element-type 'ht-node-type
+                                       :initial-element (ht-invalid-node))
+     :type ht-node-array-type)))
 
 (deftype code-table-type () '(simple-array (unsigned-byte 4) 1))
 
@@ -118,25 +118,28 @@
          (type (simple-array (unsigned-byte 16)
                              (#. (+ 29 +lengths-extra-bits-offset+)))
                *len/dist-bases*))
-(defparameter *extra-bits*
-  (concatenate
-   '(simple-array (unsigned-byte 4) (61))
-   (replace (make-array +lengths-extra-bits-offset+ :initial-element 0)
-            #(0 0 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13))
-   #(0 0 0 0 0 0 0 0 1 1 1 1 2 2 2 2 3 3 3 3 4 4 4 4 5 5 5 5 0)))
+
+(alexandria:define-constant +extra-bits+
+    (concatenate
+     '(simple-array (unsigned-byte 4) (61))
+     (replace (make-array +lengths-extra-bits-offset+ :initial-element 0)
+              #(0 0 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13))
+     #(0 0 0 0 0 0 0 0 1 1 1 1 2 2 2 2 3 3 3 3 4 4 4 4 5 5 5 5 0))
+  :test 'equalp)
+
 
 ;; base length value for each length/distance code, add to extra bits
 ;; to get length
-
-(defparameter *len/dist-bases*
-  (concatenate '(simple-array (unsigned-byte 16) (61))
-               (replace (make-array +lengths-extra-bits-offset+ :initial-element 0)
-                        #(1 2 3 4 5 7 9 13 17 25 33 49 65 97
-                          129 193 257 385 513 769
-                          1025 1537 2049 3073 4097 6145 8193
-                          12289 16385 24577))
-               #(3 4 5 6 7 8 9 10 11 13 15 17 19 23 27 31 35 43 51 59 67 83 99
-                 115 131 163 195 227 258)))
+(alexandria:define-constant +len/dist-bases+
+    (concatenate '(simple-array (unsigned-byte 16) (61))
+                 (replace (make-array +lengths-extra-bits-offset+ :initial-element 0)
+                          #(1 2 3 4 5 7 9 13 17 25 33 49 65 97
+                            129 193 257 385 513 769
+                            1025 1537 2049 3073 4097 6145 8193
+                            12289 16385 24577))
+                 #(3 4 5 6 7 8 9 10 11 13 15 17 19 23 27 31 35 43 51 59 67 83 99
+                   115 131 163 195 227 258))
+  :test 'equalp)
 
 (declaim (type (simple-array (unsigned-byte 15) (32768)) *bit-rev-table*))
 (defparameter *bit-rev-table*
@@ -152,6 +155,7 @@
 
 (defun build-tree-part (tree table tree-offset type)
   ;; # of entries of each bit size
+  (declare (optimize speed))
   (let* ((counts (let ((a (make-array 16 :element-type '(unsigned-byte 11)
                                          :initial-element 0)))
                    (map nil (lambda (i) (when (plusp i) (incf (aref a i))))
@@ -273,9 +277,9 @@
                                    (+ v
                                       +lengths-start+
                                       (- +lengths-extra-bits-offset+)))
-                                 :start (aref *len/dist-bases* v)
-                                 :end (+ (aref *len/dist-bases* v)
-                                         (1- (expt 2 (aref *extra-bits* v)))))))
+                                 :start (aref +len/dist-bases+ v)
+                                 :end (+ (aref +len/dist-bases+ v)
+                                         (1- (expt 2 (aref +extra-bits+ v)))))))
                         (#.+ht-invalid+ :invalid)))
               (when (and (ht-linkp node)
                          (not (or (ht-endp node)
@@ -293,16 +297,19 @@
                        :base (ht-dist-offset tree)
                        :depth 1)))))
 
-(Defparameter *static-huffman-tree* (make-huffman-tree))
-(build-tree *static-huffman-tree* *fixed-lit/length-table* *fixed-dist-table*)
-(dump-tree *static-huffman-tree*)
+(defconstant +static-huffman-tree+ (if (boundp '+static-huffman-tree+)
+                                       +static-huffman-tree+
+                                       (make-huffman-tree)))
+
+(build-tree +static-huffman-tree+ *fixed-lit/length-table* *fixed-dist-table*)
+(dump-tree +static-huffman-tree+)
 
 (defstruct (deflate-state (:conc-name ds-))
   ;; storage for dynamic huffman tree, modified for each dynamic block
   (dynamic-huffman-tree (make-huffman-tree) :type huffman-tree)
   ;; reference to either dynamic-huffman-tree or *static-huffman-tree*
   ;; depending on curret block
-  (current-huffman-tree *static-huffman-tree* :type huffman-tree)
+  (current-huffman-tree +static-huffman-tree+ :type huffman-tree)
   ;; # of bits to read for current huffman tree level
   (tree-bits 0 :type ht-bit-count-type)
   ;; offset of current subtable in nodes array of current-huffman-tree
@@ -313,10 +320,8 @@
   ;; (last-decoded-literal 0 :type (unsigned-byte 8)) ;; unused?
   ;; last decoded length/distance value
   (last-decoded-len/dist 0 :type (unsigned-byte 16))
-  ;; flag indicating if we are reading len or dist
-  (reading-dist-flag nil :type (or nil t))
-  ;; flag indicating we are reading the dynamic huffman table length table
-  (reading-dht-flag nil :type (or nil t))
+  ;; indicate consumer of extra bits
+  (extra-bits-type 0 :type (unsigned-byte 2))
   ;; set when reading last block
   (last-block-flag nil :type (or nil t))
   ;; number of bytes left to copy (for uncompressed block, or from
@@ -335,8 +340,9 @@
   (dht-hdist 0 :type octet)
   (dht-hclen 0 :type octet)
   (dht-len-code-index 0 :type octet)
-  (dht-len-codes (make-array 20 :element-type 'octet :initial-element 0)
-   :type octet-vector)
+  (dht-len-codes (make-array 20 :element-type '(unsigned-byte 4)
+                                :initial-element 0)
+   :type code-table-type)
   (dht-len-tree (make-huffman-tree)) ;; fixme: reduce size
   (dht-lit/len (make-array 288 :element-type '(unsigned-byte 4)
                                :initial-element 0 :fill-pointer 0))
@@ -462,12 +468,15 @@
 
 
 (declaim (type (simple-array octet (19)) *len-code-order*))
-(defparameter *len-code-order*
-  (coerce #(16 17 18 0 8 7 9 6 10 5 11 4 12 3 13 2 14 1 15)
-          '(simple-array (unsigned-byte 8) (19))))
+(alexandria:define-constant +len-code-order+
+    (coerce #(16 17 18 0 8 7 9 6 10 5 11 4 12 3 13 2 14 1 15)
+            '(simple-array (unsigned-byte 8) (19)))
+  :test 'equalp)
 
-(defun decompress (read-context state &key into)
-  (declare (type (or null octet-vector) into))
+(defparameter *stats* (make-hash-table))
+ (defun decompress (read-context state &key into)
+  (declare (type (or null octet-vector) into)
+           (optimize speed))
   (with-reader-contexts (read-context)
     (with-bit-readers (state)
       (let ((output (ds-output-buffer state))
@@ -499,10 +508,25 @@
                    (declare (type (unsigned-byte 16) offset))
                    #++(format *debug-io* "copy history ~s~%" offset)
                    (let ((x (aref output (ldb (byte 16 0)
-                                              (+ 65536
-                                                 (- offset)
-                                                 (ds-output-index state))))))
+                                              (- (ds-output-index state)
+                                                 offset)))))
                      (out-byte x)))
+                 (copy-history (n)
+                   (let ((o (ds-history-copy-offset state)))
+                     #++(loop repeat n do (copy-history-byte o))
+                     (let* ((d (ds-output-index state))
+                            (s (ldb (byte 16 0) (- d o))))
+                       (declare (type (unsigned-byte 16)  d s))
+                       (loop repeat n
+                             do (setf (aref output d) (aref output s))
+                                (setf d (ldb (byte 16 0) (1+ d)))
+                                (setf s (ldb (byte 16 0) (1+ s))))
+                       (if (< d (ds-output-index state))
+                           (copy-output 32768 65536)
+                           (when (and (< (ds-output-index state) 32768)
+                                        (>= d 32768))
+                             (copy-output 0 32768)))
+                       (setf (ds-output-index state) d))))
                  (store-dht (v)
                    (cond
                      ((plusp (ds-dht-hlit state))
@@ -520,7 +544,7 @@
                  (repeat-dht (c)
                    (loop repeat c do (store-dht (ds-dht-last-len state)))))
           (declare (ignorable #'copy-history-byte)
-                   (inline out-byte store-dht))
+                   (inline out-byte store-dht copy-history))
 
           (state-machine (state)
             :start-of-block
@@ -545,7 +569,7 @@
 
             :static-huffman-block
             (setf (ds-current-huffman-tree state)
-                  *static-huffman-tree*)
+                  +static-huffman-tree+)
             (next-state :decompress-block)
 
             :dynamic-huffman-block
@@ -560,7 +584,7 @@
             (setf (ds-dht-len-code-index state) 0)
             :dynamic-huffman-block-len-codes
             (loop while (plusp (ds-dht-hclen state))
-                  for i = (aref *len-code-order* (ds-dht-len-code-index state))
+                  for i = (aref +len-code-order+ (ds-dht-len-code-index state))
                   do (setf (aref (ds-dht-len-codes state) i)
                            (bits 3 (error "dhb-lc")))
                      (incf (ds-dht-len-code-index state))
@@ -575,14 +599,14 @@
             #++(dump-tree (ds-dht-len-tree state))
             (setf (ds-current-huffman-tree state)
                   (ds-dht-len-tree state))
-            (setf (ds-reading-dht-flag state) t)
+            (setf (ds-extra-bits-type state) 2)
             (next-state :decode-huffman-entry)
 
             :dynamic-huffman-block4
             (build-tree (ds-dynamic-huffman-tree state)
                         (ds-dht-lit/len state)
                         (ds-dht-dist state))
-            (setf (ds-reading-dht-flag state) nil)
+            (setf (ds-extra-bits-type state) 0)
             (setf (ds-current-huffman-tree state)
                   (ds-dynamic-huffman-tree state))
             (next-state :decompress-block)
@@ -609,10 +633,8 @@
               #++(format *debug-io* "got ~d bits ~16,'0b -> node ~16,'0b~%"
                          (ds-tree-bits state)
                          bits node)
+              ;; test file shows ~ 1.5:1.3:0.5 for link:len/dist:literal
               (ecase (ht-node-type node)
-                (#.+ht-literal+
-                 (out-byte (ht-value node))
-                 (next-state :decode-huffman-entry))
                 (#.+ht-link/end+
                  (when (ht-endp node)
                    (next-state :block-end))
@@ -620,33 +642,41 @@
                        (ds-tree-offset state) (ht-link-offset node))
                  (next-state :decode-huffman-entry2))
                 (#.+ht-len/dist+
-                 (if (ds-reading-dht-flag state)
+                 (if (= (ds-extra-bits-type state) 2)
                      ;; reading dynamic table lengths
                      (let ((v (ht-value node)))
+                       #++(incf (gethash v *stats* 0))
                        (cond
                          ((< v 16)
                           (setf (ds-dht-last-len state) v)
                           (store-dht v)
                           (next-state :more-dht?))
+                         ((= v 16)
+                          (setf (ds-extra-bits-needed state) 2
+                                (ds-last-decoded-len/dist state) 3))
+                         ((= v 17)
+                          (setf (ds-extra-bits-needed state) 3
+                                (ds-last-decoded-len/dist state) 3
+                                (ds-dht-last-len state) 0))
                          (t
-                          (setf (ds-extra-bits-needed state)
-                                (ecase v (16 2) (17 3) (18 7)))
-                          (setf (ds-last-decoded-len/dist state)
-                                (ecase v (16 3) (17 3) (18 11)))
-                          (when (> v 16)
-                            (setf (ds-dht-last-len state) 0))
-                          (next-state :extra-bits))))
+                          (setf (ds-extra-bits-needed state) 7
+                                (ds-last-decoded-len/dist state) 11
+                                (ds-dht-last-len state) 0)))
+                       (next-state :extra-bits)))
                      ;; reading length or distance, with possible extra bits
                      (let ((v (ht-value node)))
                        (setf (ds-extra-bits-needed state)
-                             (aref *extra-bits* v))
+                             (aref +extra-bits+ v))
                        (setf (ds-last-decoded-len/dist state)
-                             (aref *len/dist-bases* v))
+                             (aref +len/dist-bases+ v))
                        #++(format *debug-io* " read l/d ~s: ~s ~s ~%"
                                   v
                                   (ds-extra-bits-needed state)
                                   (ds-last-decoded-len/dist state))
-                       (next-state :extra-bits))))))
+                       (next-state :extra-bits)))
+                (#.+ht-literal+
+                 (out-byte (ht-value node))
+                 (next-state :decode-huffman-entry))))
             :more-dht?
             #++(format *debug-io* "  ~s ~s~%"
                        (ds-dht-hlit state)
@@ -654,7 +684,9 @@
             (if (or (plusp (ds-dht-hlit state))
                     (plusp (ds-dht-hdist state)))
                 (next-state :decode-huffman-entry)
-                (next-state :dynamic-huffman-block4))
+                (progn
+                  (setf (ds-extra-bits-type state) 0)
+                  (next-state :dynamic-huffman-block4)))
             :extra-bits
             (when (plusp (ds-extra-bits-needed state))
               (let ((bits (bits (ds-extra-bits-needed state) (error "7"))))
@@ -663,35 +695,33 @@
                            (ds-extra-bits-needed state) bits)
                 (incf (ds-last-decoded-len/dist state)
                       bits)))
-            (cond
-              ((ds-reading-dht-flag state)
-               (repeat-dht (ds-last-decoded-len/dist state))
-               (next-state :more-dht?))
-              ((ds-reading-dist-flag state)
+            (ecase (ds-extra-bits-type state)
+              (0 ;; len
+               (setf (ds-bytes-to-copy state)
+                     (ds-last-decoded-len/dist state))
+               (next-state :read-dist))
+              (1 ;; dist
                (setf (ds-history-copy-offset state)
                      (ds-last-decoded-len/dist state))
-               (setf (ds-reading-dist-flag state) nil)
-
+               (setf (ds-extra-bits-type state) 0)
                #++(format t "match ~s ~s~%"
                           (ds-bytes-to-copy state)
                           (ds-history-copy-offset state))
                (next-state :copy-history))
-              (t
-               (setf (ds-bytes-to-copy state)
-                     (ds-last-decoded-len/dist state))
-               (next-state :read-dist)))
+              (2 ;; dht
+               (repeat-dht (ds-last-decoded-len/dist state))
+               (next-state :more-dht?)))
 
             :read-dist
             (setf (ds-tree-bits state)
                   (ht-dist-start-bits (ds-current-huffman-tree state)))
             (setf (ds-tree-offset state)
                   (ht-dist-offset (ds-current-huffman-tree state)))
-            (setf (ds-reading-dist-flag state) t)
+            (setf (ds-extra-bits-type state) 1)
             (next-state :decode-huffman-entry2)
 
             :copy-history
-            (loop repeat (ds-bytes-to-copy state)
-                  do (copy-history-byte (ds-history-copy-offset state)))
+            (copy-history (ds-bytes-to-copy state))
             (next-state :decompress-block)
 
             :done)
@@ -703,5 +733,3 @@
           (if into
               into
               (reverse out)))))))
-
-

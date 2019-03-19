@@ -496,7 +496,7 @@
   :test 'equalp)
 
 (defparameter *stats* (make-hash-table))
- (defun decompress (read-context state &key into)
+(defun decompress (read-context state &key into)
   (declare (type (or null octet-vector) into)
            (optimize speed))
   (with-reader-contexts (read-context)
@@ -594,7 +594,7 @@
                        (if (< d (ds-output-index state))
                            (copy-output 32768 65536)
                            (when (and (< (ds-output-index state) 32768)
-                                        (>= d 32768))
+                                      (>= d 32768))
                              (copy-output 0 32768)))
                        (setf (ds-output-index state) d))))
                  (store-dht (v)
@@ -733,17 +733,17 @@
                                 (ds-last-decoded-len/dist state) 11
                                 (ds-dht-last-len state) 0)))
                        (next-state :extra-bits)))
-                     ;; reading length or distance, with possible extra bits
-                     (let ((v (ht-value node)))
-                       (setf (ds-extra-bits-needed state)
-                             (aref +extra-bits+ v))
-                       (setf (ds-last-decoded-len/dist state)
-                             (aref +len/dist-bases+ v))
-                       #++(format *debug-io* " read l/d ~s: ~s ~s ~%"
-                                  v
-                                  (ds-extra-bits-needed state)
-                                  (ds-last-decoded-len/dist state))
-                       (next-state :extra-bits)))
+                 ;; reading length or distance, with possible extra bits
+                 (let ((v (ht-value node)))
+                   (setf (ds-extra-bits-needed state)
+                         (aref +extra-bits+ v))
+                   (setf (ds-last-decoded-len/dist state)
+                         (aref +len/dist-bases+ v))
+                   #++(format *debug-io* " read l/d ~s: ~s ~s ~%"
+                              v
+                              (ds-extra-bits-needed state)
+                              (ds-last-decoded-len/dist state))
+                   (next-state :extra-bits)))
                 (#.+ht-literal+
                  (out-byte (ht-value node))
                  (next-state :decode-huffman-entry))))

@@ -519,7 +519,8 @@
                       (error "???"))))
                  (repeat-dht (c)
                    (loop repeat c do (store-dht (ds-dht-last-len state)))))
-          (declare (ignorable #'copy-history-byte))
+          (declare (ignorable #'copy-history-byte)
+                   (inline out-byte store-dht))
 
           (state-machine (state)
             :start-of-block

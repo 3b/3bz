@@ -104,7 +104,31 @@
              (macrolet ((octet (&optional (eob-form
                                            '(error "read past end of buffer")))
                           `(%octet (aref ,',vector (pos))
-                                   ,eob-form)))
+                                   ,eob-form))
+                        ;; read up to 8 octets in LE order, return
+                        ;; result + # of octets read as multiple
+                        ;; values
+                        (word64 ()
+                          (with-gensyms (available result)
+                            `(let ((,available (octets-left)))
+                               (if (>= ,available 8)
+                                   (let ((,result (nibbles:ub64ref/le
+                                                   ,',vector (pos))))
+                                     (incf (pos) 8)
+                                     (values ,result 8))
+                                   (let ((,result 0))
+                                     (loop
+                                       for i fixnum below ,available
+                                       do (setf ,result
+                                                (ldb (byte 64 0)
+                                                     (logior
+                                                      ,result
+                                                      (ash
+                                                       (aref ,',vector
+                                                             (+ (pos) i))
+                                                       (* i 8))))))
+                                     (incf (pos) ,available)
+                                     (values ,result ,available)))))))
                ,@body)))))))
 
 (defmacro with-stream-context ((context) &body body)
@@ -131,7 +155,9 @@
                                  (locally (declare (type size-t ,p))
                                    (when (>= ,p (end))
                                      ,eob-form))))
-                             (read-byte ,',stream)))))
+                             (read-byte ,',stream))))
+                      (word64 ()
+                        `(error "implement OCTETS for streams")))
              ,@body))))))
 
 (defmacro with-ffi-context ((context) &body body)
@@ -147,7 +173,9 @@
            (macrolet ((octet (&optional (eob-form
                                          '(error "read past end of buffer")))
                         `(%octet (cffi:mem-ref ,',pointer :uint8 (pos))
-                                 ,eob-form)))
+                                 ,eob-form))
+                      (word64 ()
+                        `(error "implement OCTETS for pointer")))
              ,@body))))))
 
 (defmacro with-reader-contexts ((in) &body body)

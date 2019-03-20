@@ -369,97 +369,106 @@
    :type code-table-type)
   (dht-lit/len/dist-index 0 :type (mod 320))
   (dht-last-len 0 :type octet)
-;;; bitstream state:
-  ;; # of bits remaining to read if read was interrupted
-                                        ;(partial-bits-needed 0 :type (unsigned-byte 4))
-  ;; bits read so far if read was interrupted (largest value we read
-  ;; at once is 16bit size, so fi)
-                                        ;(partial-bits-read 0 :type (unsigned-byte 16))
-  ;; remaining bits of last partially consumed octet (or
-  (partial-bits 0 :type (unsigned-byte 16))
+  ;; bitstream state: we read up to 64bits at a time to try to
+  ;; minimize time spent interacting with input stream relative to
+  ;; decoding time.
+  (partial-bits 0 :type (unsigned-byte 64))
   ;; # of valid bits remaining in partial-bits (0 = none)
-  (bits-remaining 0 :type (unsigned-byte 4)))
-
+  ;; (bits-remaining 0 :type (unsigned-byte 6)) bit offset of
+  ;; remaining valid bits in partial-bits. 64 = none remaining.  note
+  ;; that when storing less than 64 bits (at end of input, etc), we
+  ;; need to use upper bits
+  (partial-bit-offset 64 :type (unsigned-byte 7)))
 (defmacro with-bit-readers ((state) &body body)
-  `(macrolet (;; true if previous read was interrupted and we
-              ;; can't make any more progress without new input
-              #++(blockedp ()
-                   `(and (plusp (ds-partial-bits-needed ,',state))
-                         (zerop (octets-left))))
-              ;; consume any leftover bits from last read
-              (%use-partial-bits (n)
-                `(progn
-                   #++(format *debug-io* "use partial bits ~s/~s = ~8,'0b~%"
-                              ,n (ds-bits-remaining ,',state)
-                              (ds-partial-bits ,',state))
-                   (prog1
-                       (ldb (byte ,n 0) (ds-partial-bits ,',state))
-                     (decf (ds-bits-remaining ,',state) ,n)
-                     (setf (ds-partial-bits ,',state)
-                           (ash (ds-partial-bits ,',state) (- ,n))))))
+  `(macrolet (;; use cached bits (only called when we can fill current
+              ;; read from cache)
+              (%use-partial-bits (n n2)
+                `(prog1
+                     (ldb (byte ,n (ds-partial-bit-offset ,',state))
+                          (ds-partial-bits ,',state))
+                   (setf (ds-partial-bit-offset ,',state) ,n2)))
               ;; try to get more bits from source (only called when
               ;; there aren't enough already read)
-              (%try-read-bits (bits interrupt-form)
-                (with-gensyms (tmp n o r octet)
+              (%try-read-bits (n interrupt-form)
+                (with-gensyms (tmp o r n2 n3 input octets)
                   `(let ((,tmp 0)
-                         (,n ,bits)
                          (,o 0))
-                     (declare (type (unsigned-byte 5) ,n ,o)
-                              (type (unsigned-byte 16) ,tmp))
-                     #++(format *debug-io* "try-read-bits ~s/~s = ~16,'0b~%"
-                                ,n
-                                (ds-bits-remaining ,',state)
-                                (ds-partial-bits ,',state))
+                     (declare (type (unsigned-byte 6) ,o)
+                              (type (unsigned-byte 16) ,tmp)
+                              (type (unsigned-byte 6) ,n))
                      (flet ((int ()
                               ;; if we ran out of input, store what we
                               ;; have so we can try again later
-                              (setf (ds-bits-remaining ,',state) ,o
-                                    (ds-partial-bits ,',state) ,tmp)
+                              (assert (< ,o 16))
+                              (let ((,r (- 64 ,o)))
+                                (declare (type (unsigned-byte 6) ,r)
+                                         (type (unsigned-byte 4) ,o))
+                                (setf (ds-partial-bit-offset ,',state) ,r)
+                                (setf (ds-partial-bits ,',state)
+                                      (ldb (byte 64 0)
+                                           (ash (ldb (byte ,o 0) ,tmp) ,r))))
                               ;; and let caller decide what to do next
                               ,interrupt-form))
-                       ;; we had some partial input, so start with that
-                       (when (plusp (ds-bits-remaining ,',state))
-                         #++(format *debug-io* " used remaining ~s ~8,'0b~%"
-                                    (ds-bits-remaining ,',state)
-                                    (ds-partial-bits ,',state))
-                         (setf ,tmp (ds-partial-bits ,',state))
-                         (setf ,o (ds-bits-remaining ,',state)))
-                       ;; we only support up to 16bit values, so just
-                       ;; hard code 2 tries to read more bits
-                       (let ((,octet 0)
-                             (,r (- ,n ,o)))
-                         (declare (type (unsigned-byte 5) ,r)
-                                  (type octet ,octet))
-                         ;; we need at least 1 octet, so try to
-                         ;; consume it directly
-                         (when (>= ,r 8)
-                           (setf ,octet (octet (int)))
-                           (setf (ldb (byte 8 ,o) ,tmp) ,octet)
-                           (incf ,o 8)
-                           (decf ,r 8))
-                         ;; we need at least 1 bit and less than an
-                         ;; octet (or we tried to read more than 16
-                         ;; bits), so try to consume part of an octet
-                         (when (plusp ,r)
-                           (setf ,octet (octet (int)))
-                           (setf (ldb (byte ,r ,o) ,tmp) ,octet))
-                         (if (or (zerop ,r) (= ,r 8))
-                             ;; used up entire octet
-                             (setf (ds-bits-remaining ,',state) 0)
-                             ;; used up partial octet
-                             (setf (ds-bits-remaining ,',state) (- 8 ,r)
-                                   (ds-partial-bits ,',state)
-                                   (ash ,octet (- ,r))))))
-                     #++(format *debug-io* " -> ~4,'0x ~16,'0b~%" ,tmp ,tmp)
+                       ;; we had some leftover bits, try to use them
+                       ;; before getting more input
+                       (when (< (ds-partial-bit-offset ,',state) 64)
+                         (let ((,r (- 64 (ds-partial-bit-offset ,',state))))
+                          (assert (<= ,r 16))
+                           (setf ,tmp
+                                 (ldb (byte ,r (ds-partial-bit-offset ,',state))
+                                      (ds-partial-bits ,',state)))
+                           (setf ,o ,r)))
+                       ;; try to read more bits from input
+                       (multiple-value-bind (,input ,octets)
+                           (word64)
+                         (if (zerop ,octets)
+                             (setf (ds-partial-bit-offset ,',state) 64)
+                             (let ((,r (* 8 (- 8 ,octets))))
+                               (declare (type (unsigned-byte 6) ,r))
+                               (setf (ds-partial-bit-offset ,',state) ,r)
+                               (setf (ds-partial-bits ,',state)
+                                     (ldb (byte 64 0) (ash ,input ,r))))))
+                       ;; consume any additional available input
+                       (let* ((,n2 (- ,n ,o))
+                              (,n3 (+ (ds-partial-bit-offset ,',state) ,n2)))
+                         (cond
+                           ;; we have enough bits to finish read
+                           ((< ,n3 64)
+                            (setf ,tmp
+                                  (ldb (byte 16 0)
+                                       (logior ,tmp
+                                               (ash (ldb (byte ,n2 (ds-partial-bit-offset ,',state))
+                                                         (ds-partial-bits ,',state))
+                                                    ,o))))
+                            (setf (ds-partial-bit-offset ,',state) ,n3))
+                           ;; we have some bits, but not enough. consume
+                           ;; what is available and error
+                           ((< (ds-partial-bit-offset ,',state) 64)
+                            (let ((,r (- 64 (ds-partial-bit-offset ,',state))))
+                              (setf ,tmp
+                                    (ldb (byte 16 0)
+                                         (logior ,tmp
+                                                 (ash (ldb (byte ,r (ds-partial-bit-offset ,',state))
+                                                           (ds-partial-bits ,',state))
+                                                      ,o))))
+                              (incf ,o ,r)
+                              (int)))
+                           ;; didn't get any new bits, error
+                           (t
+                            (int)))))
+                     ;; if we got here, return results
                      ,tmp)))
               (bits (n interrupt-form)
-                `(progn
-                   (assert (plusp ,n))
-                   (if (>= (ds-bits-remaining ,',state) ,n)
-                       (%use-partial-bits ,n)
-                       (%try-read-bits ,n ,interrupt-form))))
+                (with-gensyms (n2)
+                  (once-only (n)
+                   `(let ((,n2 (+ (ds-partial-bit-offset ,',state)
+                                  (the (unsigned-byte 6) ,n))))
+                      (if (<= ,n2 64)
+                          (%use-partial-bits ,n ,n2)
+                          (%try-read-bits ,n ,interrupt-form))))))
               (byte-align ()
-                `(setf (ds-bits-remaining ,',state) 0)))
+                `(setf (ds-partial-bit-offset ,',state)
+                       (* 8 (ceiling (ds-partial-bit-offset ,',state) 8)))))
      ,@body))
 
 

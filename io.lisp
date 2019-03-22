@@ -157,7 +157,10 @@
                                      ,eob-form))))
                              (read-byte ,',stream))))
                       (word64 ()
-                        `(error "implement OCTETS for streams")))
+                        `(progn
+                           (break "implement WORD64 for streams")
+                           (values 0 0))
+                        ))
              ,@body))))))
 
 (defmacro with-ffi-context ((context) &body body)
@@ -175,7 +178,9 @@
                         `(%octet (cffi:mem-ref ,',pointer :uint8 (pos))
                                  ,eob-form))
                       (word64 ()
-                        `(error "implement OCTETS for pointer")))
+                        `(progn
+                           (break "implement WORD64 for pointers")
+                           (values 0 0))))
              ,@body))))))
 
 (defmacro with-reader-contexts ((in) &body body)

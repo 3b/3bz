@@ -26,6 +26,11 @@
 (deftype ht-node-type ()'(unsigned-byte 16))
 (deftype ht-node-array-type () `(simple-array ht-node-type (,+max-tree-size+)))
 
+(defmacro wrap-fixnum (x)
+  ;; a few places we already checked something will be a fixnum (for
+  ;; example an array index in a loop), so tell the compiler it doesn't
+  ;; need to check for bignums
+  `(ldb (byte #. (integer-length most-positive-fixnum) 0) ,x))
 
 ;; accessors/predicates/constructors for node in tree
 ;; low bits 00 = literal
@@ -153,11 +158,13 @@
   (declare (type (unsigned-byte 15) x))
   (ldb (byte bits (- 15 bits)) (aref *bit-rev-table* x)))
 
-(defun build-tree-part (tree tree-offset table type start end)
+(defun build-tree-part (tree tree-offset table type start end
+                        scratch)
   (declare (type fixnum tree-offset start end)
-           (type code-table-type table))
+           (type code-table-type table)
+           (optimize speed))
+  (assert (typep scratch 'huffman-tree))
   ;; # of entries of each bit size
-  (declare (optimize speed))
   (let* ((counts (let ((a (make-array 16 :element-type '(unsigned-byte 11)
                                          :initial-element 0)))
                    (loop for x from start below end
@@ -185,9 +192,10 @@
          ;; range of bit sizes used
          (min (position-if-not 'zerop counts))
          ;; temp space for sorting table
-         (terminals (make-huffman-tree)))
+         (terminals scratch))
     (declare (type (or null (unsigned-byte 4)) min)
-             (type (simple-array (unsigned-byte 11) (16)) counts))
+             (type (simple-array (unsigned-byte 11) (16)) counts)
+             (dynamic-extent counts offsets code-offsets))
     (unless min
       (return-from build-tree-part (values 0 0)))
     ;; sort table/allocate codes
@@ -261,18 +269,19 @@
           (nth-value 1 (build-tree-part tree count dist :dist
                                         0 (length dist))))))
 
-(defun build-tree* (tree lit/len/dist mid end)
+(defun build-tree* (tree lit/len/dist mid end scratch)
   (declare (optimize speed)
            (type (vector (unsigned-byte 4)) lit/len/dist)
            (type (and unsigned-byte fixnum) mid))
   (multiple-value-bind (count bits)
-      (build-tree-part tree 0 lit/len/dist :lit/len 0 mid)
+      (build-tree-part tree 0 lit/len/dist :lit/len 0 mid scratch)
     (setf (ht-len-start-bits tree) bits)
     (setf (ht-dist-offset tree) count)
     (setf (ht-dist-start-bits tree)
           (nth-value 1 (build-tree-part tree count
                                         lit/len/dist :dist
-                                        mid end)))
+                                        mid end
+                                        scratch)))
     #++(dump-tree tree)))
 
 (defun dump-tree (tree &key bits base (depth 0))
@@ -379,102 +388,107 @@
   ;; that when storing less than 64 bits (at end of input, etc), we
   ;; need to use upper bits
   (partial-bit-offset 64 :type (unsigned-byte 7)))
+
 (defmacro with-bit-readers ((state) &body body)
-  `(macrolet (;; use cached bits (only called when we can fill current
-              ;; read from cache)
-              (%use-partial-bits (n n2)
-                `(prog1
-                     (ldb (byte ,n (ds-partial-bit-offset ,',state))
-                          (ds-partial-bits ,',state))
-                   (setf (ds-partial-bit-offset ,',state) ,n2)))
-              ;; try to get more bits from source (only called when
-              ;; there aren't enough already read)
-              (%try-read-bits (n interrupt-form)
-                (with-gensyms (tmp o r n2 n3 input octets)
-                  `(let ((,tmp 0)
-                         (,o 0))
-                     (declare (type (unsigned-byte 6) ,o)
-                              (type (unsigned-byte 16) ,tmp)
-                              (type (unsigned-byte 6) ,n))
-                     (flet ((int ()
-                              ;; if we ran out of input, store what we
-                              ;; have so we can try again later
-                              (assert (< ,o 16))
-                              (let ((,r (- 64 ,o)))
-                                (declare (type (unsigned-byte 6) ,r)
-                                         (type (unsigned-byte 4) ,o))
-                                (setf (ds-partial-bit-offset ,',state) ,r)
-                                (setf (ds-partial-bits ,',state)
-                                      (ldb (byte 64 0)
-                                           (ash (ldb (byte ,o 0) ,tmp) ,r))))
-                              ;; and let caller decide what to do next
-                              ,interrupt-form))
-                       ;; we had some leftover bits, try to use them
-                       ;; before getting more input
-                       (when (< (ds-partial-bit-offset ,',state) 64)
-                         (let ((,r (- 64 (ds-partial-bit-offset ,',state))))
-                          (assert (<= ,r 16))
-                           (setf ,tmp
-                                 (ldb (byte ,r (ds-partial-bit-offset ,',state))
-                                      (ds-partial-bits ,',state)))
-                           (setf ,o ,r)))
-                       ;; try to read more bits from input
-                       (multiple-value-bind (,input ,octets)
-                           (word64)
-                         (cond
-                           ((= ,octets 8)
-                            (setf (ds-partial-bit-offset ,',state) 0
-                                  (ds-partial-bits ,',state) ,input))
-                           ((zerop ,octets)
-                            (setf (ds-partial-bit-offset ,',state) 64))
-                           (t
-                            (let ((,r (* 8 (- 8 ,octets))))
-                              (declare (type (unsigned-byte 6) ,r))
-                              (setf (ds-partial-bit-offset ,',state) ,r)
-                              (setf (ds-partial-bits ,',state)
-                                    (ldb (byte 64 0) (ash ,input ,r)))))))
-                       ;; consume any additional available input
-                       (let* ((,n2 (- ,n ,o))
-                              (,n3 (+ (ds-partial-bit-offset ,',state) ,n2)))
-                         (cond
-                           ;; we have enough bits to finish read
-                           ((< ,n3 64)
-                            (setf ,tmp
-                                  (ldb (byte 16 0)
-                                       (logior ,tmp
-                                               (ash (ldb (byte ,n2 (ds-partial-bit-offset ,',state))
-                                                         (ds-partial-bits ,',state))
-                                                    ,o))))
-                            (setf (ds-partial-bit-offset ,',state) ,n3))
-                           ;; we have some bits, but not enough. consume
-                           ;; what is available and error
-                           ((< (ds-partial-bit-offset ,',state) 64)
-                            (let ((,r (- 64 (ds-partial-bit-offset ,',state))))
+  `(let ((partial-bit-offset (ds-partial-bit-offset ,state))
+         (partial-bits (ds-partial-bits state)))
+     (declare (type (unsigned-byte 7) partial-bit-offset)
+              (type (unsigned-byte 64) partial-bits))
+     (macrolet (;; use cached bits (only called when we can fill current
+                ;; read from cache)
+                (%use-partial-bits (n n2)
+                  `(prog1
+                       (ldb (byte ,n partial-bit-offset)
+                            partial-bits)
+                     (setf partial-bit-offset  ,n2)))
+                ;; try to get more bits from source (only called when
+                ;; there aren't enough already read)
+                (%try-read-bits (n interrupt-form)
+                  (with-gensyms (tmp o r n2 n3 input octets)
+                    `(let ((,tmp 0)
+                           (,o 0))
+                       (declare (type (unsigned-byte 6) ,o)
+                                (type (unsigned-byte 16) ,tmp)
+                                (type (unsigned-byte 6) ,n))
+                       (flet ((int ()
+                                ;; if we ran out of input, store what we
+                                ;; have so we can try again later
+                                (assert (< ,o 16))
+                                (let ((,r (- 64 ,o)))
+                                  (declare (type (unsigned-byte 6) ,r)
+                                           (type (unsigned-byte 4) ,o))
+                                  (setf partial-bit-offset ,r)
+                                  (setf partial-bits
+                                        (ldb (byte 64 0)
+                                             (ash (ldb (byte ,o 0) ,tmp) ,r))))
+                                ;; and let caller decide what to do next
+                                ,interrupt-form))
+                         ;; we had some leftover bits, try to use them
+                         ;; before getting more input
+                         (when (< partial-bit-offset 64)
+                           (let ((,r (- 64 partial-bit-offset)))
+                             (assert (<= ,r 16))
+                             (setf ,tmp
+                                   (ldb (byte ,r partial-bit-offset)
+                                        partial-bits))
+                             (setf ,o ,r)))
+                         ;; try to read more bits from input
+                         (multiple-value-bind (,input ,octets)
+                             (word64)
+                           (cond
+                             ((= ,octets 8)
+                              (setf partial-bit-offset 0
+                                    partial-bits ,input))
+                             ((zerop ,octets)
+                              (setf partial-bit-offset 64))
+                             (t
+                              (let ((,r (* 8 (- 8 ,octets))))
+                                (declare (type (unsigned-byte 6) ,r))
+                                (setf partial-bit-offset ,r)
+                                (setf partial-bits
+                                      (ldb (byte 64 0) (ash ,input ,r)))))))
+                         ;; consume any additional available input
+                         (let* ((,n2 (- ,n ,o))
+                                (,n3 (+ partial-bit-offset ,n2)))
+                           (cond
+                             ;; we have enough bits to finish read
+                             ((< ,n3 64)
                               (setf ,tmp
                                     (ldb (byte 16 0)
                                          (logior ,tmp
-                                                 (ash (ldb (byte ,r (ds-partial-bit-offset ,',state))
-                                                           (ds-partial-bits ,',state))
+                                                 (ash (ldb (byte ,n2 partial-bit-offset)
+                                                           partial-bits)
                                                       ,o))))
-                              (incf ,o ,r)
-                              (int)))
-                           ;; didn't get any new bits, error
-                           (t
-                            (int)))))
-                     ;; if we got here, return results
-                     ,tmp)))
-              (bits (n interrupt-form)
-                (with-gensyms (n2)
-                  (once-only (n)
-                   `(let ((,n2 (+ (ds-partial-bit-offset ,',state)
-                                  (the (unsigned-byte 6) ,n))))
-                      (if (<= ,n2 64)
-                          (%use-partial-bits ,n ,n2)
-                          (%try-read-bits ,n ,interrupt-form))))))
-              (byte-align ()
-                `(setf (ds-partial-bit-offset ,',state)
-                       (* 8 (ceiling (ds-partial-bit-offset ,',state) 8)))))
-     ,@body))
+                              (setf partial-bit-offset ,n3))
+                             ;; we have some bits, but not enough. consume
+                             ;; what is available and error
+                             ((< partial-bit-offset 64)
+                              (let ((,r (- 64 partial-bit-offset)))
+                                (setf ,tmp
+                                      (ldb (byte 16 0)
+                                           (logior ,tmp
+                                                   (ash (ldb (byte ,r partial-bit-offset)
+                                                             partial-bits)
+                                                        ,o))))
+                                (incf ,o ,r)
+                                (int)))
+                             ;; didn't get any new bits, error
+                             (t
+                              (int)))))
+                       ;; if we got here, return results
+                       ,tmp)))
+                (bits (n interrupt-form)
+                  (with-gensyms (n2)
+                    (once-only (n)
+                      `(let ((,n2 (+ partial-bit-offset
+                                     (the (unsigned-byte 6) ,n))))
+                         (if (<= ,n2 64)
+                             (%use-partial-bits ,n ,n2)
+                             (%try-read-bits ,n ,interrupt-form))))))
+                (byte-align ()
+                  `(setf partial-bit-offset
+                         (* 8 (ceiling partial-bit-offset  8)))))
+       ,@body)))
 
 
 
@@ -511,125 +525,127 @@
 (defun decompress (read-context state &key into)
   (declare (type (or null octet-vector) into)
            (optimize speed))
+  (check-type into octet-vector)
+  (assert into)
   (with-reader-contexts (read-context)
     (with-bit-readers (state)
-      (let ((output (ds-output-buffer state))
-            (out nil)
-            (count 0))
-        (declare (type (simple-array (unsigned-byte 8) (65536)) output)
-                 (fixnum count))
-        (labels ((copy-output (from to)
-                   (if into
-                       (replace into output
-                                :start1 count
-                                :start2 from :end2 to)
-                       (push (subseq output from to) out))
-                   (incf count (- to from)))
-                 (out-byte (x)
-                   #++(format t " ~2,'0x" x)
-                   #++(if (<= 32 x 127)
-                          (format t " {~c}" (code-char x))
-                          (format t " <~d>" x))
-                   #++(format *debug-io* "##out ~2,'0x~%" x)
-                   (setf (aref output (ds-output-index state)) x)
-                   (setf (ds-output-index state)
-                         (ldb (byte 16 0) (1+ (ds-output-index state))))
-                   (when (zerop (ds-output-index state))
-                     (copy-output 32768 65536))
-                   (when (= 32768 (ds-output-index state))
-                     (copy-output 0 32768)))
-                 (copy-history-byte (offset)
-                   (declare (type (unsigned-byte 16) offset))
-                   #++(format *debug-io* "copy history ~s~%" offset)
-                   (let ((x (aref output (ldb (byte 16 0)
-                                              (- (ds-output-index state)
-                                                 offset)))))
-                     (out-byte x)))
+      (let ((count 0)
+            (copy-offset (ds-history-copy-offset state))
+            (bytes-to-copy (ds-bytes-to-copy state))
+            (dht-hlit (ds-dht-hlit state))
+            (dht-hlit+hdist (ds-dht-hlit+hdist state))
+            (dht-hclen (ds-dht-hclen state))
+            (dht-lit/len/dist (ds-dht-lit/len/dist state))
+            (dht-lit/len/dist-index (ds-dht-lit/len/dist-index state))
+            (dht-len-codes (ds-dht-len-codes state))
+            (dht-len-code-index (ds-dht-len-code-index state))
+            (dht-last-len (ds-dht-last-len state))
+            (current-huffman-tree (ds-current-huffman-tree state))
+            (ht-nodes (ht-nodes (ds-current-huffman-tree state)))
+            (dht-len-tree (ds-dht-len-tree state))
+            (extra-bits-type (ds-extra-bits-type state))
+            (tree-bits (ds-tree-bits state))
+            (tree-offset (ds-tree-offset state))
+            (extra-bits-needed (ds-extra-bits-needed state))
+            (last-decoded-len/dist (ds-last-decoded-len/dist state))
+            (last-block-flag (ds-last-block-flag state))
+            (ht-scratch (make-huffman-tree)))
+        (declare (type (simple-array (unsigned-byte 8) 1) into)
+                 (fixnum count)
+                 (type (unsigned-byte 15) copy-offset)
+                 (type (unsigned-byte 10) dht-hlit dht-hlit+hdist)
+                 (type (simple-array (unsigned-byte 4) (320)) dht-lit/len/dist)
+                 (type (mod 320) dht-lit/len/dist-index)
+                 (type octet dht-hclen dht-last-len)
+                 (type (simple-array (unsigned-byte 4) (20)) dht-len-codes)
+                 (type (mod 20) dht-len-code-index)
+                 (type huffman-tree
+                       current-huffman-tree dht-len-tree ht-scratch)
+                 (type (simple-array ht-node-type 1) ht-nodes)
+                 (type (mod 3) extra-bits-type)
+                 (type (unsigned-byte 4) tree-bits extra-bits-needed)
+                 (type (unsigned-byte 11) tree-offset)
+                 (type (unsigned-byte 16) last-decoded-len/dist bytes-to-copy)
+                 (type (or t nil) last-block-flag))
+        (labels ((out-byte (x)
+                   (setf (aref into count) x)
+                   (incf count))
                  (copy-history (n)
                    (declare (type fixnum n))
-                   (let ((o (ds-history-copy-offset state)))
-                     #++(loop repeat n do (copy-history-byte o))
-                     (let* ((d (ds-output-index state))
-                            (s (ldb (byte 16 0) (- d o)))
+                   (let ((o copy-offset))
+                     (let* ((d count)
                             (n1 n)
-                            (e (- 65536 n 8)))
-                       (declare (type (unsigned-byte 16) d s))
-                       ;; if either range overlaps end of ring buffer,
-                       ;; copy by bytes until neither overlaps
-                       (when (or (>= s e)
-                                 (>= d e))
-                         (loop until (zerop n)
-                               until (and (< s e)
-                                          (< d e))
-                               do (setf (aref output d) (aref output s))
-                                  (setf d (ldb (byte 16 0) (1+ d)))
-                                  (setf s (ldb (byte 16 0) (1+ s)))
-                                  (decf n)))
-                       ;; we are copying in a 64k ring buffer and
-                       ;; deflate is limited to copying 258 bytes from
-                       ;; at most 32k away. If we copy a few bytes too
-                       ;; much it won't overwrite anything important,
-                       ;; so just copy by largest word size we can.
-                       ;; (word size is limited by offset, since it
-                       ;; has to copy results of previous copies if it
-                       ;; overlaps, unlike REPLACE)
+                            (s (- d o))
+                            (e (length into)))
+                       (declare (type fixnum d s e))
+                       ;; if copy won't fit, use slow path for now
+                       (when (> (+ d n) e)
+                         (loop while (< d e)
+                               do (setf (aref into d) (aref into s))
+                                  (setf d (1+ d))
+                                  (setf s (1+ s)))
+                         ;; todo: store state so it can continue
+                         (error "output full"))
+                       ;; to speed things up, we allow writing past
+                       ;; current output index (but not past end of
+                       ;; buffer), and read/write as many bytes at a
+                       ;; time as possible.
                        (cond
                          ((>= o 8)
                           (loop repeat (ceiling n 8)
-                                do (setf (nibbles:ub64ref/le output d)
-                                         (nibbles:ub64ref/le output s))
-                                   (setf d (ldb (byte 16 0) (+ d 8)))
-                                   (setf s (ldb (byte 16 0) (+ s 8)))))
+                                do (setf (nibbles:ub64ref/le into d)
+                                         (nibbles:ub64ref/le into s))
+                                   (setf d (wrap-fixnum (+ d 8)))
+                                   (setf s (wrap-fixnum (+ s 8)))))
                          ((>= o 4)
                           (loop repeat (ceiling n 4)
-                                do (setf (nibbles:ub32ref/le output d)
-                                         (nibbles:ub32ref/le output s))
-                                   (setf d (ldb (byte 16 0) (+ d 4)))
-                                   (setf s (ldb (byte 16 0) (+ s 4)))))
+                                do (setf (nibbles:ub32ref/le into d)
+                                         (nibbles:ub32ref/le into s))
+                                   (setf d (wrap-fixnum (+ d 4)))
+                                   (setf s (wrap-fixnum (+ s 4)))))
                          ((>= o 2)
                           (loop repeat (ceiling n 2)
-                                do (setf (nibbles:ub16ref/le output d)
-                                         (nibbles:ub16ref/le output s))
-                                   (setf d (ldb (byte 16 0) (+ d 2)))
-                                   (setf s (ldb (byte 16 0) (+ s 2)))))
+                                do (setf (nibbles:ub16ref/le into d)
+                                         (nibbles:ub16ref/le into s))
+                                   (setf d (wrap-fixnum (+ d 2)))
+                                   (setf s (wrap-fixnum (+ s 2)))))
                          (t
-                          (loop repeat n
-                                do (setf (aref output d)
-                                         (aref output s))
-                                   (setf d (ldb (byte 16 0) (1+ d)))
-                                   (setf s (ldb (byte 16 0) (1+ s))))))
-                       ;; D may be a bit past actual value, so reset
-                       ;; to correct end point
-                       (setf d (ldb (byte 16 0)
-                                    (+ (ds-output-index state) n1)))
-                       ;; copy to output buffer if needed
-                       (if (< d (ds-output-index state))
-                           (copy-output 32768 65536)
-                           (when (and (< (ds-output-index state) 32768)
-                                      (>= d 32768))
-                             (copy-output 0 32768)))
-                       (setf (ds-output-index state) d))))
+                          ;; if offset is 1, we are just repeating a
+                          ;; single byte...
+                          (loop with x of-type octet = (aref into s)
+                                repeat n
+                                do (setf (aref into d) x)
+                                   (setf d (wrap-fixnum (1+ d))))))
+                       ;; D may be a bit past actual value, so calculate
+                       ;; correct offset
+                       (setf count (+ count n1)))))
                  (store-dht (v)
                    (cond
-                     ((plusp (ds-dht-hlit+hdist state))
-                      (setf (aref (ds-dht-lit/len/dist state)
-                                  (ds-dht-lit/len/dist-index state))
+                     ((plusp dht-hlit+hdist)
+                      (setf (aref dht-lit/len/dist dht-lit/len/dist-index)
                             v)
-                      (incf (ds-dht-lit/len/dist-index state))
-                      (decf (ds-dht-hlit+hdist state)))
+                      (incf dht-lit/len/dist-index)
+                      (decf dht-hlit+hdist))
                      (t
                       (error "???"))))
                  (repeat-dht (c)
-                   (loop repeat c do (store-dht (ds-dht-last-len state)))))
-          (declare (ignorable #'copy-history-byte)
-                   (inline out-byte store-dht copy-history))
+                   (loop repeat c do (store-dht dht-last-len))
+                   #++
+                   (progn
+                     (fill (ds-dht-lit/len/dist state)
+                           (ldb (byte 4 0) (ds-dht-last-len state))
+                           :start (ds-dht-lit/len/dist-index state)
+                           :end (+ c (ds-dht-lit/len/dist-index state)))
+                     (incf (ds-dht-lit/len/dist-index state) c)
+                     (decf (ds-dht-hlit+hdist state) c))))
+          (declare (inline out-byte store-dht))
 
           (state-machine (state)
             :start-of-block
             (let ((final (the bit (bits 1 (error "foo!"))))
                   (type (the (unsigned-byte 2) (bits 2 (error "foo2")))))
               #++(format t "block ~s ~s~%" final type)
-              (setf (ds-last-block-flag state) (plusp final))
+              (setf last-block-flag (plusp final))
               (ecase type
                 (0 (next-state :uncompressed-block))
                 (1 (next-state :static-huffman-block))
@@ -646,55 +662,55 @@
             (next-state :block-end)
 
             :static-huffman-block
-            (setf (ds-current-huffman-tree state)
-                  +static-huffman-tree+)
+            (setf current-huffman-tree +static-huffman-tree+)
+            (setf ht-nodes (ht-nodes current-huffman-tree))
             (next-state :decompress-block)
 
             :dynamic-huffman-block
-            (setf (ds-dht-hlit state) (+ 257 (bits 5 (error "dhb1"))))
+            (setf dht-hlit (+ 257 (bits 5 (error "dhb1"))))
             #++(format t "hlit = ~s~%" (ds-dht-hlit state))
             :dynamic-huffman-block2
             (let ((hdist (+ 1 (bits 5 (error "dhb2")))))
-              (setf (ds-dht-hlit+hdist state)
-                    (+ (ds-dht-hlit state)
-                       hdist)))
-            (setf (ds-dht-lit/len/dist-index state) 0)
+              (setf dht-hlit+hdist (+ dht-hlit hdist)))
+            (setf dht-lit/len/dist-index 0)
             :dynamic-huffman-block3
-            (setf (ds-dht-hclen state) (+ 4 (bits 4 (error "dhb3"))))
-            (fill (ds-dht-len-codes state) 0)
-            (setf (ds-dht-len-code-index state) 0)
+            (setf dht-hclen (+ 4 (bits 4 (error "dhb3"))))
+            (fill dht-len-codes 0)
+            (setf dht-len-code-index 0)
             :dynamic-huffman-block-len-codes
-            (loop while (plusp (ds-dht-hclen state))
-                  for i = (aref +len-code-order+ (ds-dht-len-code-index state))
-                  do (setf (aref (ds-dht-len-codes state) i)
+            (loop while (plusp dht-hclen)
+                  for i = (aref +len-code-order+ dht-len-code-index)
+                  do (setf (aref dht-len-codes i)
                            (bits 3 (error "dhb-lc")))
-                     (incf (ds-dht-len-code-index state))
-                     (decf (ds-dht-hclen state)))
-            (setf (ht-len-start-bits (ds-dht-len-tree state))
+                     (incf dht-len-code-index)
+                     (decf dht-hclen))
+            (setf (ht-len-start-bits dht-len-tree)
                   (nth-value 1
-                             (build-tree-part (ds-dht-len-tree state) 0
-                                              (ds-dht-len-codes state)
-                                              :dht-len 0 20)))
+                             (build-tree-part dht-len-tree 0
+                                              dht-len-codes
+                                              :dht-len 0 20
+                                              ht-scratch)))
             #++(format *debug-io*
                        "build dht len tree: ~s~%"  (ds-dht-len-codes state))
             #++(dump-tree (ds-dht-len-tree state))
-            (setf (ds-current-huffman-tree state)
-                  (ds-dht-len-tree state))
-            (setf (ds-extra-bits-type state) 2)
+            (setf current-huffman-tree dht-len-tree)
+            (setf ht-nodes (ht-nodes current-huffman-tree))
+            (setf extra-bits-type 2)
             (next-state :decode-huffman-entry)
 
             :dynamic-huffman-block4
             (build-tree* (ds-dynamic-huffman-tree state)
-                         (ds-dht-lit/len/dist state)
-                         (ds-dht-hlit state)
-                         (ds-dht-lit/len/dist-index state))
-            (setf (ds-extra-bits-type state) 0)
-            (setf (ds-current-huffman-tree state)
-                  (ds-dynamic-huffman-tree state))
+                         dht-lit/len/dist
+                         dht-hlit
+                         dht-lit/len/dist-index
+                         ht-scratch)
+            (setf extra-bits-type 0)
+            (setf current-huffman-tree (ds-dynamic-huffman-tree state))
+            (setf ht-nodes (ht-nodes current-huffman-tree))
             (next-state :decompress-block)
 
             :block-end
-            (if (ds-last-block-flag state)
+            (if last-block-flag
                 (next-state :done)
                 (next-state :start-of-block))
 
@@ -704,14 +720,13 @@
 
 
             :decode-huffman-entry
-            (setf (ds-tree-bits state)
-                  (ht-len-start-bits (ds-current-huffman-tree state)))
-            (setf (ds-tree-offset state) 0)
+            (setf tree-bits
+                  (ht-len-start-bits current-huffman-tree))
+            (setf tree-offset 0)
             :decode-huffman-entry2
             ;; fixme: build table reversed instead of reversing bits
-            (let* ((bits (bits (ds-tree-bits state) (error "6")))
-                   (node (aref (ht-nodes (ds-current-huffman-tree state))
-                               (+ bits (ds-tree-offset state)))))
+            (let* ((bits (bits tree-bits (error "6")))
+                   (node (aref ht-nodes (+ bits tree-offset))))
               #++(format *debug-io* "got ~d bits ~16,'0b -> node ~16,'0b~%"
                          (ds-tree-bits state)
                          bits node)
@@ -720,36 +735,36 @@
                 (#.+ht-link/end+
                  (when (ht-endp node)
                    (next-state :block-end))
-                 (setf (ds-tree-bits state) (ht-link-bits node)
-                       (ds-tree-offset state) (ht-link-offset node))
+                 (setf tree-bits (ht-link-bits node)
+                       tree-offset (ht-link-offset node))
                  (next-state :decode-huffman-entry2))
                 (#.+ht-len/dist+
-                 (if (= (ds-extra-bits-type state) 2)
+                 (if (= extra-bits-type 2)
                      ;; reading dynamic table lengths
                      (let ((v (ht-value node)))
                        #++(incf (gethash v *stats* 0))
                        (cond
                          ((< v 16)
-                          (setf (ds-dht-last-len state) v)
+                          (setf dht-last-len v)
                           (store-dht v)
                           (next-state :more-dht?))
                          ((= v 16)
-                          (setf (ds-extra-bits-needed state) 2
-                                (ds-last-decoded-len/dist state) 3))
+                          (setf extra-bits-needed 2
+                                last-decoded-len/dist 3))
                          ((= v 17)
-                          (setf (ds-extra-bits-needed state) 3
-                                (ds-last-decoded-len/dist state) 3
-                                (ds-dht-last-len state) 0))
+                          (setf extra-bits-needed 3
+                                last-decoded-len/dist 3
+                                dht-last-len 0))
                          (t
-                          (setf (ds-extra-bits-needed state) 7
-                                (ds-last-decoded-len/dist state) 11
-                                (ds-dht-last-len state) 0)))
+                          (setf extra-bits-needed 7
+                                last-decoded-len/dist 11
+                                dht-last-len 0)))
                        (next-state :extra-bits)))
                  ;; reading length or distance, with possible extra bits
                  (let ((v (ht-value node)))
-                   (setf (ds-extra-bits-needed state)
+                   (setf extra-bits-needed
                          (aref +extra-bits+ v))
-                   (setf (ds-last-decoded-len/dist state)
+                   (setf last-decoded-len/dist
                          (aref +len/dist-bases+ v))
                    #++(format *debug-io* " read l/d ~s: ~s ~s ~%"
                               v
@@ -763,54 +778,42 @@
             #++(format *debug-io* "  ~s ~s~%"
                        (ds-dht-hlit state)
                        (ds-dht-hdist state))
-            (if (plusp (ds-dht-hlit+hdist state))
+            (if (plusp dht-hlit+hdist)
                 (next-state :decode-huffman-entry)
                 (progn
-                  (setf (ds-extra-bits-type state) 0)
+                  (setf extra-bits-type 0)
                   (next-state :dynamic-huffman-block4)))
             :extra-bits
-            (when (plusp (ds-extra-bits-needed state))
-              (let ((bits (bits (ds-extra-bits-needed state) (error "7"))))
+            (when (plusp extra-bits-needed)
+              (let ((bits (bits extra-bits-needed (error "7"))))
                 (declare (type (unsigned-byte 16) bits))
                 #++(format *debug-io* " ~s extra bits = ~s~%"
                            (ds-extra-bits-needed state) bits)
-                (incf (ds-last-decoded-len/dist state)
-                      bits)))
-            (ecase (ds-extra-bits-type state)
+                (incf last-decoded-len/dist bits)))
+            (ecase extra-bits-type
               (0 ;; len
-               (setf (ds-bytes-to-copy state)
-                     (ds-last-decoded-len/dist state))
+               (setf bytes-to-copy last-decoded-len/dist)
                (next-state :read-dist))
               (1 ;; dist
-               (setf (ds-history-copy-offset state)
-                     (ds-last-decoded-len/dist state))
-               (setf (ds-extra-bits-type state) 0)
+               (setf copy-offset last-decoded-len/dist)
+               (setf extra-bits-type 0)
                #++(format t "match ~s ~s~%"
                           (ds-bytes-to-copy state)
                           (ds-history-copy-offset state))
                (next-state :copy-history))
               (2 ;; dht
-               (repeat-dht (ds-last-decoded-len/dist state))
+               (repeat-dht last-decoded-len/dist)
                (next-state :more-dht?)))
 
             :read-dist
-            (setf (ds-tree-bits state)
-                  (ht-dist-start-bits (ds-current-huffman-tree state)))
-            (setf (ds-tree-offset state)
-                  (ht-dist-offset (ds-current-huffman-tree state)))
-            (setf (ds-extra-bits-type state) 1)
+            (setf tree-bits (ht-dist-start-bits current-huffman-tree))
+            (setf tree-offset (ht-dist-offset current-huffman-tree))
+            (setf extra-bits-type 1)
             (next-state :decode-huffman-entry2)
 
             :copy-history
-            (copy-history (ds-bytes-to-copy state))
+            (copy-history bytes-to-copy)
             (next-state :decompress-block)
 
             :done)
-          (cond
-            ((< 0 (ds-output-index state) 32768)
-             (copy-output 0 (ds-output-index state)))
-            ((< 32768 (ds-output-index state))
-             (copy-output 32768 (ds-output-index state))))
-          (if into
-              into
-              (reverse out)))))))
+          into)))))

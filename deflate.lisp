@@ -421,13 +421,18 @@
                        ;; try to read more bits from input
                        (multiple-value-bind (,input ,octets)
                            (word64)
-                         (if (zerop ,octets)
-                             (setf (ds-partial-bit-offset ,',state) 64)
-                             (let ((,r (* 8 (- 8 ,octets))))
-                               (declare (type (unsigned-byte 6) ,r))
-                               (setf (ds-partial-bit-offset ,',state) ,r)
-                               (setf (ds-partial-bits ,',state)
-                                     (ldb (byte 64 0) (ash ,input ,r))))))
+                         (cond
+                           ((= ,octets 8)
+                            (setf (ds-partial-bit-offset ,',state) 0
+                                  (ds-partial-bits ,',state) ,input))
+                           ((zerop ,octets)
+                            (setf (ds-partial-bit-offset ,',state) 64))
+                           (t
+                            (let ((,r (* 8 (- 8 ,octets))))
+                              (declare (type (unsigned-byte 6) ,r))
+                              (setf (ds-partial-bit-offset ,',state) ,r)
+                              (setf (ds-partial-bits ,',state)
+                                    (ldb (byte 64 0) (ash ,input ,r)))))))
                        ;; consume any additional available input
                        (let* ((,n2 (- ,n ,o))
                               (,n3 (+ (ds-partial-bit-offset ,',state) ,n2)))

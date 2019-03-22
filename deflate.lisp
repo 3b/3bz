@@ -496,7 +496,7 @@
                   ;; if we got here, return results
                   tmp)))
          (declare (notinline %%try-read-bits))
-         ,@body)))))
+         ,@body))))
 
 
 (defmacro state-machine ((state) &body tagbody)

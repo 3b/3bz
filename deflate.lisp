@@ -229,11 +229,13 @@
     (let ((next-subtable tree-offset))
       (declare (type (unsigned-byte 12) next-subtable))
       (labels ((next-len (l)
-                 (position-if 'plusp counts :start l))
+                 (position-if #'plusp counts :start l))
                (subtable (prefix prefix-bits)
                  (declare (ignorable prefix))
                  (or
-                  (loop for entry-bits = (next-len prefix-bits)
+                  (loop for entry-bits = (if (zerop (aref counts prefix-bits))
+                                             (next-len prefix-bits)
+                                             prefix-bits)
                         while entry-bits
                         if (= prefix-bits entry-bits)
                           return (prog1 (aref (ht-nodes terminals)

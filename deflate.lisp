@@ -730,7 +730,6 @@
                   (ht-len-start-bits current-huffman-tree))
             (setf tree-offset 0)
             :decode-huffman-entry2
-            ;; fixme: build table reversed instead of reversing bits
             (let* ((bits (bits tree-bits (error "6")))
                    (node (aref ht-nodes (+ bits tree-offset))))
               #++(format *debug-io* "got ~d bits ~16,'0b -> node ~16,'0b~%"

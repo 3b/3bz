@@ -408,79 +408,7 @@
                 ;; try to get more bits from source (only called when
                 ;; there aren't enough already read)
                 (%try-read-bits (n interrupt-form)
-                  (with-gensyms (tmp o r n2 n3 input octets)
-                    `(let ((,tmp 0)
-                           (,o 0))
-                       (declare (type (unsigned-byte 6) ,o)
-                                (type (unsigned-byte 16) ,tmp)
-                                (type (unsigned-byte 6) ,n))
-                       (flet ((int ()
-                                ;; if we ran out of input, store what we
-                                ;; have so we can try again later
-                                (assert (< ,o 16))
-                                (let ((,r (- 64 ,o)))
-                                  (declare (type (unsigned-byte 6) ,r)
-                                           (type (unsigned-byte 4) ,o))
-                                  (setf partial-bit-offset ,r)
-                                  (setf partial-bits
-                                        (ldb (byte 64 0)
-                                             (ash (ldb (byte ,o 0) ,tmp) ,r))))
-                                ;; and let caller decide what to do next
-                                ,interrupt-form))
-                         ;; we had some leftover bits, try to use them
-                         ;; before getting more input
-                         (when (< partial-bit-offset 64)
-                           (let ((,r (- 64 partial-bit-offset)))
-                             (assert (<= ,r 16))
-                             (setf ,tmp
-                                   (ldb (byte ,r partial-bit-offset)
-                                        partial-bits))
-                             (setf ,o ,r)))
-                         ;; try to read more bits from input
-                         (multiple-value-bind (,input ,octets)
-                             (word64)
-                           (cond
-                             ((= ,octets 8)
-                              (setf partial-bit-offset 0
-                                    partial-bits ,input))
-                             ((zerop ,octets)
-                              (setf partial-bit-offset 64))
-                             (t
-                              (let ((,r (* 8 (- 8 ,octets))))
-                                (declare (type (unsigned-byte 6) ,r))
-                                (setf partial-bit-offset ,r)
-                                (setf partial-bits
-                                      (ldb (byte 64 0) (ash ,input ,r)))))))
-                         ;; consume any additional available input
-                         (let* ((,n2 (- ,n ,o))
-                                (,n3 (+ partial-bit-offset ,n2)))
-                           (cond
-                             ;; we have enough bits to finish read
-                             ((< ,n3 64)
-                              (setf ,tmp
-                                    (ldb (byte 16 0)
-                                         (logior ,tmp
-                                                 (ash (ldb (byte ,n2 partial-bit-offset)
-                                                           partial-bits)
-                                                      ,o))))
-                              (setf partial-bit-offset ,n3))
-                             ;; we have some bits, but not enough. consume
-                             ;; what is available and error
-                             ((< partial-bit-offset 64)
-                              (let ((,r (- 64 partial-bit-offset)))
-                                (setf ,tmp
-                                      (ldb (byte 16 0)
-                                           (logior ,tmp
-                                                   (ash (ldb (byte ,r partial-bit-offset)
-                                                             partial-bits)
-                                                        ,o))))
-                                (incf ,o ,r)
-                                (int)))
-                             ;; didn't get any new bits, error
-                             (t
-                              (int)))))
-                       ;; if we got here, return results
-                       ,tmp)))
+                  `(%%try-read-bits ,n (lambda () ,interrupt-form)))
                 (bits (n interrupt-form)
                   (with-gensyms (n2)
                     (once-only (n)
@@ -492,9 +420,83 @@
                 (byte-align ()
                   `(setf partial-bit-offset
                          (* 8 (ceiling partial-bit-offset  8)))))
-       ,@body)))
-
-
+       (flet ((%%try-read-bits (n interrupt-form)
+                (let ((tmp 0)
+                      (o 0))
+                  (declare (type (unsigned-byte 5) o)
+                           (type (unsigned-byte 16) tmp)
+                           (type (unsigned-byte 6) n))
+                  (flet ((int ()
+                           ;; if we ran out of input, store what we
+                           ;; have so we can try again later
+                           (assert (< o 16))
+                           (let ((r (- 64 o)))
+                             (declare (type (unsigned-byte 6) r)
+                                      (type (unsigned-byte 4) o))
+                             (setf partial-bit-offset r)
+                             (setf partial-bits
+                                   (ldb (byte 64 0)
+                                        (ash (ldb (byte o 0) tmp) r))))
+                           ;; and let caller decide what to do next
+                           (funcall interrupt-form)
+                           0))
+                    ;; we had some leftover bits, try to use them
+                    ;; before getting more input
+                    (when (< partial-bit-offset 64)
+                      (let ((r (- 64 partial-bit-offset)))
+                        (assert (<= r 16))
+                        (setf tmp
+                              (ldb (byte r partial-bit-offset)
+                                   partial-bits))
+                        (setf o r)))
+                    ;; try to read more bits from input
+                    (multiple-value-bind (input octets)
+                        (word64)
+                      (cond
+                        ((= octets 8)
+                         (setf partial-bit-offset 0
+                               partial-bits input))
+                        ((zerop octets)
+                         (setf partial-bit-offset 64))
+                        (t
+                         (let ((r (* 8 (- 8 octets))))
+                           (declare (type (unsigned-byte 6) r))
+                           (setf partial-bit-offset r)
+                           (setf partial-bits
+                                 (ldb (byte 64 0) (ash input r))))))
+                      (when (and (zerop o)
+                                 (< (+ partial-bit-offset n) 64))
+                        (return-from %%try-read-bits
+                          (%use-partial-bits n (+ partial-bit-offset n)))))
+                    ;; consume any additional available input
+                    (let* ((n2 (- n o))
+                           (n3 (+ partial-bit-offset n2)))
+                      (declare (type (unsigned-byte 4) n2)
+                               (type (unsigned-byte 7) n3))
+                      (cond
+                        ;; we have enough bits to finish read
+                        ((< n3 64)
+                         (setf (ldb (byte n2 o) tmp)
+                               (ldb (byte n2 partial-bit-offset)
+                                    partial-bits))
+                         (setf partial-bit-offset n3))
+                        ;; we have some bits, but not enough. consume
+                        ;; what is available and error
+                        ((< partial-bit-offset 64)
+                         (let ((r (- 64 partial-bit-offset)))
+                           (declare (type (unsigned-byte 4) r ))
+                           (setf (ldb (byte r o) tmp)
+                                 (ldb (byte r partial-bit-offset)
+                                      partial-bits))
+                           (incf o r)
+                           (int)))
+                        ;; didn't get any new bits, error
+                        (t
+                         (int)))))
+                  ;; if we got here, return results
+                  tmp)))
+         (declare (notinline %%try-read-bits))
+         ,@body)))))
 
 
 (defmacro state-machine ((state) &body tagbody)

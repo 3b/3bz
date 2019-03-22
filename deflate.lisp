@@ -262,12 +262,14 @@
   (declare (optimize speed)
            (type code-table-type lit/len dist))
   (multiple-value-bind (count bits)
-      (build-tree-part tree 0 lit/len :lit/len 0 (length lit/len))
+      (build-tree-part tree 0 lit/len :lit/len 0 (length lit/len)
+                       (make-huffman-tree))
     (setf (ht-len-start-bits tree) bits)
     (setf (ht-dist-offset tree) count)
     (setf (ht-dist-start-bits tree)
           (nth-value 1 (build-tree-part tree count dist :dist
-                                        0 (length dist))))))
+                                        0 (length dist)
+                                        (make-huffman-tree))))))
 
 (defun build-tree* (tree lit/len/dist mid end scratch)
   (declare (optimize speed)

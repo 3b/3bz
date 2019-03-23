@@ -6,6 +6,10 @@
   :author "Bart Botta <00003b at gmail.com>"
   :components
   ((:file "package")
+   (:file "util")
+   (:file "types")
+   (:file "constants")
+   (:file "huffman-tree")
    (:file "io")
    (:file "deflate")))
 

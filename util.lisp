@@ -20,19 +20,28 @@
                              for type = (getf keys :type)
                              collect (list slot (accessor slot) type)))))))))
 
-(defmacro with-cached-state ((struct type save-state-fun) &body body)
+(defmacro with-cached-state ((struct type save-state-fun &body vars)
+                             &body body)
   (let ((slots (gethash type *cached-struct-defs*)))
     (assert slots)
-    `(let ,(loop for (var accessor) in slots
-                 collect `(,var (,accessor ,struct)))
-       (declare ,@(loop for (var nil type) in slots
-                        when type collect `(type ,type ,var)
-                        collect `(ignorable ,var)))
-       (flet ((,save-state-fun ()
+    `(symbol-macrolet ,(loop for (var accessor) in slots
+                             unless (member var vars)
+                               collect `(,var (,accessor ,struct)))
+
+       (let ,(loop for (var accessor) in slots
+                   when (member var vars)
+                     collect `(,var (,accessor ,struct)))
+         (declare ,@(loop for (var nil type) in slots
+                          when (and (member var vars) type)
+                            collect `(type ,type ,var)
+                          when (member var vars)
+                          collect `(ignorable ,var)))
+         (flet ((,save-state-fun ()
                 ,@(loop for (var accessor) in slots
+                        when (member var vars)
                         collect `(setf (,accessor ,struct) ,var))))
          (declare (ignorable #',save-state-fun))
-         ,@body))))
+         ,@body)))))
 
 
 (defmacro wrap-fixnum (x)

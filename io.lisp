@@ -157,10 +157,20 @@
                                      ,eob-form))))
                              (read-byte ,',stream))))
                       (word64 ()
-                        `(progn
-                           (break "implement WORD64 for streams")
-                           (values 0 0))
-                        ))
+                        (with-gensyms (available result)
+                          `(locally (declare (optimize (speed 1)))
+                             (let ((,available (- (end) (pos))))
+                               (if (>= ,available 8)
+                                   (values (nibbles:read-ub64/le ,',stream) 8)
+                                   (let ((,result 0))
+                                     (declare (type (unsigned-byte 64) ,result)
+                                              (type (mod 8) ,available))
+                                     (loop
+                                       for i fixnum below (min 8 ,available)
+                                       do (setf (ldb (byte 8 (* i 8))
+                                                     ,result)
+                                                (octet)))
+                                     (values ,result ,available))))))))
              ,@body))))))
 
 (defmacro with-ffi-context ((context) &body body)
@@ -178,9 +188,29 @@
                         `(%octet (cffi:mem-ref ,',pointer :uint8 (pos))
                                  ,eob-form))
                       (word64 ()
-                        `(progn
-                           (break "implement WORD64 for pointers")
-                           (values 0 0))))
+                        (with-gensyms (available result)
+                          `(let ((,available (octets-left)))
+                             (if (>= ,available 8)
+                                 (let ((,result (cffi:mem-ref
+                                                 ,',pointer :uint64 (pos))))
+                                   (incf (pos) 8)
+                                   (values ,result 8))
+                                 (let ((,result 0))
+                                   (declare (type (unsigned-byte 64) ,result))
+                                   (loop
+                                     for i fixnum below (min 8 ,available)
+                                     do (setf ,result
+                                              (ldb (byte 64 0)
+                                                   (logior
+                                                    ,result
+                                                    (ash
+                                                     (cffi:mem-ref
+                                                      ,',pointer
+                                                      :uint8
+                                                      (+ (pos) i))
+                                                     (* i 8))))))
+                                   (incf (pos) ,available)
+                                   (values ,result ,available)))))))
              ,@body))))))
 
 (defmacro with-reader-contexts ((in) &body body)

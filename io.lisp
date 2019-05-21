@@ -209,7 +209,7 @@
                                      (values ,result ,available))))))))
              ,@body))))))
 
-(defmacro with-ffi-context ((context) &body body)
+(defmacro with-pointer-context ((context) &body body)
   (with-gensyms (boxes pointer)
     (once-only (context)
       `(let* ((,boxes (boxes ,context))
@@ -273,16 +273,22 @@
                                    (values ,result ,available)))))))
              ,@body))))))
 
-(defmacro with-reader-contexts ((in) &body body)
-  `(let ((@context ,in))
-     (declare (ignorable @context))
-     (etypecase ,in
-       (octet-vector-context
-        (with-vector-context (,in)
-          ,@body))
-       #++(octet-stream-context
-        (with-stream-context (,in)
-          ,@body))
-       #++(octet-pointer-context
-        (with-ffi-context (,in)
-          ,@body)))))
+(defmacro defun-with-reader-contexts (base-name lambda-list (in) &body body)
+  `(progn
+     ,@(loop for cc in '(vector stream pointer)
+             for w = (find-symbol (format nil "~a-~a-~a" 'with cc 'context)
+                                  (find-package :3bz))
+             for n = (intern (format nil "~a/~a" base-name cc)
+                             (find-package :3bz))
+             collect `(defun ,n ,lambda-list
+                        (,w (,in)
+                            (let ()
+                              ,@body))))
+     (defun ,base-name ,lambda-list
+       (etypecase ,in
+         ,@(loop for cc in '(vector stream pointer)
+                 for ct = (find-symbol (format nil "~a-~a-~a" 'octet cc 'context)
+                                       (find-package :3bz))
+                 for n = (find-symbol (format nil "~a/~a" base-name cc)
+                                      (find-package :3bz))
+                 collect `(,ct (,n ,@lambda-list)))))))

@@ -128,6 +128,27 @@
                                                              (+ (pos) i))
                                                        (* i 8))))))
                                      (incf (pos) ,available)
+                                     (values ,result ,available))))))
+                        (word32 ()
+                          (with-gensyms (available result)
+                            `(let ((,available (octets-left)))
+                               (if (>= ,available 4)
+                                   (let ((,result (nibbles:ub32ref/le
+                                                   ,',vector (pos))))
+                                     (incf (pos) 4)
+                                     (values ,result 4))
+                                   (let ((,result 0))
+                                     (loop
+                                       for i fixnum below ,available
+                                       do (setf ,result
+                                                (ldb (byte 32 0)
+                                                     (logior
+                                                      ,result
+                                                      (ash
+                                                       (aref ,',vector
+                                                             (+ (pos) i))
+                                                       (* i 8))))))
+                                     (incf (pos) ,available)
                                      (values ,result ,available)))))))
                ,@body)))))))
 
@@ -167,6 +188,21 @@
                                               (type (mod 8) ,available))
                                      (loop
                                        for i fixnum below (min 8 ,available)
+                                       do (setf (ldb (byte 8 (* i 8))
+                                                     ,result)
+                                                (octet)))
+                                     (values ,result ,available)))))))
+                      (word32 ()
+                        (with-gensyms (available result)
+                          `(locally (declare (optimize (speed 1)))
+                             (let ((,available (- (end) (pos))))
+                               (if (>= ,available 4)
+                                   (values (nibbles:read-ub32/le ,',stream) 4)
+                                   (let ((,result 0))
+                                     (declare (type (unsigned-byte 64) ,result)
+                                              (type (mod 4) ,available))
+                                     (loop
+                                       for i fixnum below (min 4 ,available)
                                        do (setf (ldb (byte 8 (* i 8))
                                                      ,result)
                                                 (octet)))
@@ -210,6 +246,30 @@
                                                       (+ (pos) i))
                                                      (* i 8))))))
                                    (incf (pos) ,available)
+                                   (values ,result ,available))))))
+                      (word32 ()
+                        (with-gensyms (available result)
+                          `(let ((,available (octets-left)))
+                             (if (>= ,available 4)
+                                 (let ((,result (cffi:mem-ref
+                                                 ,',pointer :uint32 (pos))))
+                                   (incf (pos) 4)
+                                   (values ,result 4))
+                                 (let ((,result 0))
+                                   (declare (type (unsigned-byte 32) ,result))
+                                   (loop
+                                     for i fixnum below (min 4 ,available)
+                                     do (setf ,result
+                                              (ldb (byte 32 0)
+                                                   (logior
+                                                    ,result
+                                                    (ash
+                                                     (cffi:mem-ref
+                                                      ,',pointer
+                                                      :uint8
+                                                      (+ (pos) i))
+                                                     (* i 8))))))
+                                   (incf (pos) ,available)
                                    (values ,result ,available)))))))
              ,@body))))))
 
@@ -220,9 +280,9 @@
        (octet-vector-context
         (with-vector-context (,in)
           ,@body))
-       (octet-stream-context
+       #++(octet-stream-context
         (with-stream-context (,in)
           ,@body))
-       (octet-pointer-context
+       #++(octet-pointer-context
         (with-ffi-context (,in)
           ,@body)))))

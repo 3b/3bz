@@ -9,7 +9,7 @@
 
 (declaim (inline ht-linkp ht-invalidp ht-endp ht-node-type
                  ht-link-bits ht-link-offset
-                 ht-literalp ht-value
+                 ht-literalp ht-extra-bits ht-value
                  ht-link-node ht-literal-node ht-len-node ht-dist-node
                  ht-invalid-node ht-end-node))
 (defun ht-linkp (node)
@@ -22,7 +22,7 @@
 (defun ht-node-type (node)
   (ldb (byte 2 0) node))
 
-;; for valid link, store 4 bits of bit-count, 11 bits of table base
+;; for valid link, store 4 bits of bit-count, 10 bits of table base
 (defun ht-link-node (bits index)
   (logior +ht-link/end+
           (ash bits 2)
@@ -37,40 +37,48 @@
   (zerop (ldb (byte 2 0) node)))
 (defun ht-len/dist-p (node)
   (= 1 (ldb (byte 2 0) node)))
-;; literals, length and distance just store a value. for literals, it
-;; is the code value, for len/dist it is index into base and
-;; extra-bits arrays
+;; literals just store an 8-bit code value. len/dist codes store an
+;; 8-bit index into base array, and 4bits extra bits count
+;; fixme: merge these with link, so decoded can treat them the same?
+(defun ht-extra-bits (node)
+  (ldb (byte 4 2) node))
 (defun ht-value (node)
-  (ldb (byte 14 2) node))
+  (ldb (byte 10 6) node))
+
+
 
 (defun ht-literal-node (value)
   (logior +ht-literal+
-          (ash value 2)))
+          (ash value 6)))
 
-(defun ht-len-node (value)
+(defun ht-len-node (value extra-bits)
   (assert (>= value +lengths-start+))
-  (logior +ht-len/dist+
-          ;; value stored in tree is offset so we can use single table
-          ;; for extra-bits and base-values for lengths and distances
-          (ash (+ +lengths-extra-bits-offset+
-                  (if (>= value +lengths-start+)
-                      (- value +lengths-start+)
-                      value))
-               2)))
+  ;; value stored in tree is offset so we can use single table
+  ;; for extra-bits and base-values for lengths and distances
+  (let ((v (+ +lengths-extra-bits-offset+
+                   (if (>= value +lengths-start+)
+                       (- value +lengths-start+)
+                       value))))
+    (ldb (byte 16 0)
+         (logior +ht-len/dist+
+                 (ash v 6)
+                 (ash (aref extra-bits v) 2)))))
 
-(defun ht-dist-node (value)
-  (logior +ht-len/dist+
-          (ash value 2)))
+(defun ht-dist-node (value extra-bits)
+  (ldb (byte 16 0)
+       (logior +ht-len/dist+
+               (ash value 6)
+               (ash (aref extra-bits value) 2))))
 
 (defun ht-invalid-node () #xffff)
 (defun ht-end-node () #x0001)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defstruct (huffman-tree (:conc-name ht-))
-    (len-start-bits 0 :type ht-bit-count-type)
-    (dist-start-bits 0 :type ht-bit-count-type)
-    (dist-offset 0 :type ht-offset-type)
-    (nodes (make-array +max-tree-size+ :element-type 'ht-node-type
-                                       :initial-element (ht-invalid-node))
+    (start-bits 0 :type ht-bit-count-type)
+    (max-bits 0 :type (mod 29))
+    (nodes (make-array +max-tree-size+
+                       :element-type 'ht-node-type
+                       :initial-element (ht-invalid-node))
      :type ht-node-array-type)))
 
 (defparameter *fixed-lit/length-table*
@@ -84,9 +92,10 @@
   (coerce (make-array 32 :initial-element 5) 'code-table-type))
 
 (defun build-tree-part (tree tree-offset table type start end
-                        scratch)
-  (declare (type fixnum tree-offset start end)
-           (type code-table-type table)
+                        scratch
+                        extra-bits)
+  (declare (type (and fixnum unsigned-byte) tree-offset start end)
+           (type code-table-type table extra-bits)
            (optimize speed))
   (assert (typep scratch 'huffman-tree))
   ;; # of entries of each bit size
@@ -94,7 +103,19 @@
                                          :initial-element 0)))
                    (loop for x from start below end
                          for i = (aref table x)
-                         when (plusp i) do (incf (aref a i)))
+                         do (incf (aref a i)))
+                   (loop for s fixnum = 1 then (ash s 1)
+                         for c across a
+                         for i from 0 below 16
+                         unless (zerop i)
+                           do (if (> c s)
+                                  (error "too many entries in huffman table with bit length ~s: ~s/~s." i c s)
+                                  (decf s c))
+                         finally (when (and (plusp s)
+                                            (< 1 (- (- end start)
+                                                    (aref a 0))))
+                                   (error "incomplete huffman table ~s~%" s)))
+                   (setf (aref a 0) 0)
                    a))
          ;; first position of each used bit size
          (offsets (let ((c 0))
@@ -116,13 +137,19 @@
                               counts)))
          ;; range of bit sizes used
          (min (position-if-not 'zerop counts))
+         ;; max # of bits needed to read entry + extra bits for this tree
+         (max-bits (+ (or (position-if-not 'zerop counts :from-end t) 0)
+                      (ecase type
+                        (:dist 13)
+                        (:lit/len 5)
+                        (:dht-len 7))))
          ;; temp space for sorting table
          (terminals scratch))
     (declare (type (or null (unsigned-byte 4)) min)
              (type (simple-array (unsigned-byte 11) (16)) counts)
              (dynamic-extent counts offsets code-offsets))
     (unless min
-      (return-from build-tree-part (values 0 0)))
+      (return-from build-tree-part (values 0 0 0)))
     ;; sort table/allocate codes
     (loop with offset-tmp = (copy-seq offsets)
           for i fixnum from 0
@@ -138,13 +165,13 @@
                  ((member type '(:dist :dht-len))
                   (setf (aref nodes o)
                         (if (<= i 29)
-                            (ht-dist-node i)
+                            (ht-dist-node i extra-bits)
                             ;; codes above 29 aren't used
                             (ht-invalid-node))))
                  ((> i +lengths-end+)
                   (setf (aref nodes o) (ht-invalid-node)))
                  ((>= i +lengths-start+)
-                  (setf (aref nodes o) (ht-len-node i)))
+                  (setf (aref nodes o) (ht-len-node i extra-bits)))
                  ((= i +end-code+)
                   (setf (aref nodes o) (ht-end-node)))
                  (t
@@ -183,36 +210,75 @@
               do (setf (aref (ht-nodes tree)
                              (+ tree-offset (bit-rev i min)))
                        (subtable i min))))
-      (values next-subtable min))))
-
+      (values next-subtable min max-bits))))
+#++
 (defun build-tree (tree lit/len dist)
   (declare (optimize speed)
            (type code-table-type lit/len dist))
   (multiple-value-bind (count bits)
       (build-tree-part tree 0 lit/len :lit/len 0 (length lit/len)
-                       (make-huffman-tree))
+                       (make-huffman-tree)
+                       +extra-bits+)
     (setf (ht-len-start-bits tree) bits)
     (setf (ht-dist-offset tree) count)
     (setf (ht-dist-start-bits tree)
           (nth-value 1 (build-tree-part tree count dist :dist
                                         0 (length dist)
-                                        (make-huffman-tree))))))
-
+                                        (make-huffman-tree)
+                                        +extra-bits+)))))
+#++
 (defun build-tree* (tree lit/len/dist mid end scratch)
   (declare (optimize speed)
            (type (vector (unsigned-byte 4)) lit/len/dist)
            (type (and unsigned-byte fixnum) mid))
   (multiple-value-bind (count bits)
-      (build-tree-part tree 0 lit/len/dist :lit/len 0 mid scratch)
+      (build-tree-part tree 0 lit/len/dist :lit/len 0 mid scratch +extra-bits+)
     (setf (ht-len-start-bits tree) bits)
     (setf (ht-dist-offset tree) count)
     (setf (ht-dist-start-bits tree)
           (nth-value 1 (build-tree-part tree count
                                         lit/len/dist :dist
                                         mid end
-                                        scratch)))
+                                        scratch
+                                        +extra-bits+)))
     #++(dump-tree tree)))
 
+(defun build-trees (ltree dtree lit/len dist)
+  (declare (optimize speed)
+           (type code-table-type lit/len dist))
+  (multiple-value-bind (count bits max)
+      (build-tree-part ltree 0 lit/len :lit/len 0 (length lit/len)
+                       (make-huffman-tree) +extra-bits+)
+    (declare (ignore count))
+    (setf (ht-start-bits ltree) bits)
+    (setf (ht-max-bits ltree) max)
+    (multiple-value-bind (count bits max)
+        (build-tree-part dtree 0 dist :dist 0 (length dist)
+                         (make-huffman-tree)
+                         +extra-bits+)
+      (declare (ignore count))
+      (setf (ht-start-bits dtree) bits)
+      (setf (ht-max-bits dtree) max))
+    #++(dump-tree tree)))
+
+(defun build-trees* (ltree dtree lit/len/dist mid end scratch)
+  (declare (optimize speed)
+           (type (vector (unsigned-byte 4)) lit/len/dist)
+           (type (and unsigned-byte fixnum) mid))
+  (multiple-value-bind (count bits max)
+      (build-tree-part ltree 0 lit/len/dist :lit/len 0 mid scratch +extra-bits+)
+    (declare (ignore count))
+    (setf (ht-start-bits ltree) bits)
+    (setf (ht-max-bits ltree) max)
+    (multiple-value-bind (count bits max)
+        (build-tree-part dtree 0 lit/len/dist :dist mid end
+                         scratch +extra-bits+)
+      (declare (ignore count))
+      (setf (ht-start-bits dtree) bits)
+      (setf (ht-max-bits dtree) max))
+    #++(dump-tree tree)))
+
+#++
 (defun dump-tree (tree &key bits base (depth 0))
   (cond
     ((and bits base)
@@ -254,10 +320,25 @@
        (dump-tree tree :bits (ht-dist-start-bits tree)
                        :base (ht-dist-offset tree)
                        :depth 1)))))
-
+#++
 (defconstant +static-huffman-tree+ (if (boundp '+static-huffman-tree+)
                                        +static-huffman-tree+
                                        (make-huffman-tree)))
-
+#++
 (build-tree +static-huffman-tree+ *fixed-lit/length-table* *fixed-dist-table*)
 #++(dump-tree +static-huffman-tree+)
+(defconstant +static-huffman-tree/len+ (if (boundp '+static-huffman-tree/len+)
+                                           +static-huffman-tree/len+
+                                           (make-huffman-tree)))
+(defconstant +static-huffman-tree/dist+ (if (boundp '+static-huffman-tree/dist+)
+                                            +static-huffman-tree/dist+
+                                            (make-huffman-tree)))
+
+(build-trees +static-huffman-tree/len+
+             +static-huffman-tree/dist+
+             *fixed-lit/length-table* *fixed-dist-table*)
+
+(alexandria:define-constant +static-huffman-trees+
+    (cons +static-huffman-tree/len+ +static-huffman-tree/dist+)
+  :test 'equal)
+

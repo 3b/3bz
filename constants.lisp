@@ -56,3 +56,8 @@
     (coerce #(16 17 18 0 8 7 9 6 10 5 11 4 12 3 13 2 14 1 15)
             '(simple-array (unsigned-byte 8) (19)))
   :test 'equalp)
+(declaim (type (simple-array (unsigned-byte 4) (19)) +len-code-extra+))
+(alexandria:define-constant +len-code-extra+
+    (coerce #(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 3 7)
+            '(simple-array (unsigned-byte 4) (19)))
+  :test 'equalp)

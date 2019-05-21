@@ -6,6 +6,10 @@
 (defconstant +max-tree-size+ (+ +max-tree-entries/len+
                                 +max-tree-entries/dist+))
 
+;; max # of bits for an encoded huffman tree entry + and optional extra bits
+;; (= 15 bits + 13 extra bits)
+(defconstant +ht-max-bits+ 28)
+
 ;; low-bit tags for nodes in tree
 (defconstant +ht-literal+ #b00)
 (defconstant +ht-link/end+ #b01)

@@ -26,7 +26,7 @@
   (dht-len-tree (make-huffman-tree)) ;; fixme: reduce size
   (dht-lit/len/dist (make-array (+ 288 32) :element-type '(unsigned-byte 4)
                                            :initial-element 0)
-   :type code-table-type)
+                    :type code-table-type)
   (dht-lit/len/dist-index 0 :type (mod 320))
   (dht-last-len #xff :type octet)
 
@@ -130,7 +130,6 @@
                    ;; internals of bit reader, only call after
                    ;; ensuring there are enough bits available
                    (%bits (n)
-                     (declare (optimize (speed 1)))
                      (prog1 (ldb (byte n 0) partial-bits)
                        (setf partial-bits (ash partial-bits (- n)))
                        (decf bits-remaining n)))
@@ -194,7 +193,7 @@
                         (loop repeat count
                               do (out-byte (aref into (- output-offset offset)))))
                    (copy-history (count offset)
-                     (declare (type fixnum count offset))
+                     (declare (type (and fixnum unsigned-byte) count offset))
                      (let* ((n count)
                             (o offset)
                             (d output-offset)
@@ -211,6 +210,7 @@
                          ((> (+ d n 8)
                              e)
                           (loop while (< d e)
+                                repeat n
                                 do (setf (aref into d) (aref into s))
                                    (setf d (1+ d))
                                    (setf s (1+ s)))
@@ -227,6 +227,13 @@
                                          (nibbles:ub64ref/le into s))
                                    (setf d (wrap-fixnum (+ d 8)))
                                    (setf s (wrap-fixnum (+ s 8)))))
+                         ((= o 1)
+                          ;; if offset is 1, we are just repeating a
+                          ;; single byte...
+                          (loop with x of-type octet = (aref into s)
+                                repeat n
+                                do (setf (aref into d) x)
+                                   (setf d (wrap-fixnum (1+ d)))))
                          ((= o 8)
                           (loop with x = (nibbles:ub64ref/le into s)
                                 repeat (ceiling n 8)
@@ -240,13 +247,6 @@
                                    (setf d (wrap-fixnum (+ d 4)))
                                    (setf s (wrap-fixnum (+ s 4)))))
 
-                         ((= o 1)
-                          ;; if offset is 1, we are just repeating a
-                          ;; single byte...
-                          (loop with x of-type octet = (aref into s)
-                                repeat n
-                                do (setf (aref into d) x)
-                                   (setf d (wrap-fixnum (1+ d)))))
                          ((= o 4)
                           (loop with x = (nibbles:ub32ref/le into s)
                                 with xx = (dpb x (byte 32 32) x)
@@ -265,7 +265,8 @@
                                 with xxxx = (dpb xx (byte 32 32) xx)
                                 repeat (ceiling n 8)
                                 do (setf (nibbles:ub64ref/le into d) xxxx)
-                                   (setf d (wrap-fixnum (+ d 8))))))
+                                   (setf d (wrap-fixnum (+ d 8)))))
+                         (t (error "?")))
                        ;; D may be a bit past actual value, so calculate
                        ;; correct offset
                        (setf output-offset
@@ -296,49 +297,49 @@
                          when (> ht-bits avail)
                            do (incf old bits-remaining)
                               (%fill-bits)
-                          ;; dist + extra is max 28 bits, so just
-                          ;; grab enough for that from new input
-                          ;; if available
-                          (assert (< old 32))
-                          (setf bits
-                                (logior bits
-                                        (ash
-                                         (ldb (byte (min 30 bits-remaining)
-                                                    0)
-                                              partial-bits)
-                                         old)))
-                          (setf avail
-                                (min 64
-                                     (+ avail (min 30 bits-remaining))))
-                          (when (> ht-bits avail)
-                            ;; still not enough bits, push bits back
-                            ;; onto tmp if we read more, and EOI
-                            (assert (< old 64))
-                            (assert (< (+ bits-remaining old) 64))
+                              ;; dist + extra is max 28 bits, so just
+                              ;; grab enough for that from new input
+                              ;; if available
+                              (assert (< old 32))
+                              (setf bits
+                                    (logior bits
+                                            (ash
+                                             (ldb (byte (min 30 bits-remaining)
+                                                        0)
+                                                  partial-bits)
+                                             old)))
+                              (setf avail
+                                    (min 64
+                                         (+ avail (min 30 bits-remaining))))
+                              (when (> ht-bits avail)
+                                ;; still not enough bits, push bits back
+                                ;; onto tmp if we read more, and EOI
+                                (assert (< old 64))
+                                (assert (< (+ bits-remaining old) 64))
 
-                            (setf partial-bits
-                                  (ldb (byte 64 0)
-                                       (ash partial-bits old)))
-                            (setf (ldb (byte old 0) partial-bits)
-                                  (ldb (byte old 0) bits))
-                            (incf bits-remaining old)
-                            ;; if we are reading a dist, put bits
-                            ;; from len back too so we don't need
-                            ;; separate states for lit/len and dist
-                            (locally
-                                (declare #+sbcl (sb-ext:muffle-conditions
-                                                 sb-ext:code-deletion-note))
-                              (when old-count
-                                ;; (lit/len + dist + extras is max 48
-                                ;; bits, so just
-                                (assert (< (+ old-count bits-remaining) 64))
                                 (setf partial-bits
                                       (ldb (byte 64 0)
-                                           (ash partial-bits old-count)))
-                                (setf (ldb (byte old-count 0) partial-bits)
-                                      (ldb (byte old-count 0) old-bits))
-                                (incf bits-remaining old-count)))
-                            (eoi))
+                                           (ash partial-bits old)))
+                                (setf (ldb (byte old 0) partial-bits)
+                                      (ldb (byte old 0) bits))
+                                (incf bits-remaining old)
+                                ;; if we are reading a dist, put bits
+                                ;; from len back too so we don't need
+                                ;; separate states for lit/len and dist
+                                (locally
+                                    (declare #+sbcl (sb-ext:muffle-conditions
+                                                     sb-ext:code-deletion-note))
+                                  (when old-count
+                                    ;; (lit/len + dist + extras is max 48
+                                    ;; bits, so just
+                                    (assert (< (+ old-count bits-remaining) 64))
+                                    (setf partial-bits
+                                          (ldb (byte 64 0)
+                                               (ash partial-bits old-count)))
+                                    (setf (ldb (byte old-count 0) partial-bits)
+                                          (ldb (byte old-count 0) old-bits))
+                                    (incf bits-remaining old-count)))
+                                (eoi))
                          if extra-bits
                            do (setf extra-bits (ldb (byte ht-bits offset) bits))
                               (incf offset ht-bits)
@@ -380,49 +381,44 @@
                      (declare (type huffman-tree ht))
                      (let ((ht-bits (ht-start-bits ht))
                            (bits partial-bits)
-                           ;; # of valid bits left in BITS
-                           (avail bits-remaining)
                            ;; offset of next unused bit in BITS
                            (offset 0)
                            (extra-bits nil)
                            (node 0)
                            (nodes (ht-nodes ht)))
                        (declare (type (unsigned-byte 64) bits)
-                                (type (unsigned-byte 7) avail)
-                                (type ht-bit-count-type ht-bits))
+                                (type ht-bit-count-type ht-bits)
+                                (type (unsigned-byte 5) offset))
                        (loop
                          for b = (ldb (byte ht-bits offset) bits)
                          do (setf node (aref nodes (+ node b)))
                             (incf offset ht-bits)
-                            (decf avail ht-bits)
                             (ecase (ht-node-type node)
                               (#.+ht-link/end+
                                (when (ht-endp node)
                                  (loop-finish))
                                (setf ht-bits (ht-link-bits node)
                                      node (ht-link-offset node)))
-                              (#.+ht-literal+
-                               (loop-finish))
                               (#.+ht-len/dist+
                                (let ((x (ht-extra-bits node)))
-                                 (when (zerop x)
-                                   (loop-finish))
-                                 (setf extra-bits (ldb (byte x offset) bits))
-                                 (incf offset x)
-                                 (decf avail x)
-                                 (loop-finish)))))
+                                 (when (plusp x)
+                                   (setf extra-bits (ldb (byte x offset) bits))
+                                   (incf offset x))
+                                 (loop-finish)))
+                              (#.+ht-literal+
+                               (loop-finish))))
                        (setf partial-bits (ash partial-bits (- offset)))
-                       (setf bits-remaining avail)
-                       (assert (< offset 32))
-                       (values (ht-value node)
-                               (or extra-bits 0)
-                               (ht-node-type node)
-                               (ldb (byte offset 0) bits)
-                               offset)))
+                       (decf bits-remaining offset)
+                       (values (ht-value node)            ;; code
+                               (or extra-bits 0)          ;; extra
+                               (ht-node-type node)        ;; type
+                               (ldb (byte offset 0) bits) ;; old-bits
+                               offset)))                  ;; old-count
                    (decode-huffman (ht old-bits old-count)
-                     (if (let ((s (ht-max-bits ht)))
-                           (or (bits-avail s)
-                               (%fill-bits32 s)))
+                     ;; seems to be faster to just use constant than
+                     ;; try to optimize for specific table?
+                     (if (or (bits-avail +ht-max-bits+)
+                             (%fill-bits32 +ht-max-bits+))
                          (%decode-huffman-fast ht)
                          (decode-huffman-full ht old-bits old-count))))
             (declare (inline bits-avail byte-align %fill-bits %bits bits
@@ -561,36 +557,31 @@
 ;;; dynamic or static huffman block, compressed data
 
                 :decode-compressed-data
-                (let* (;;(ht current-huffman-tree)
-                       ;;(bases +len/dist-bases+)
-                       ;;(dist-offset (ht-dist-offset ht))
-                       )
-                  (symbol-macrolet (;;(dist-offset (ht-dist-offset ht))
-                                    (bases +len/dist-bases+)
-                                    (ht current-huffman-tree))
-                    (loop
-                      (multiple-value-bind (code extra type old-bits old-count)
-                          (decode-huffman (car ht) 0 nil)
-                        (ecase type
-                          (#.+ht-len/dist+
-                           ;; got a length code, read dist and copy
-                           (let ((bytes-to-copy (+ extra (aref bases code))))
-                             ;; try to read dist. decode-huffman* will
-                             ;; push BITS back onto temp before calling
-                             ;; EOI if it fails, so we can restart state
-                             ;; at len code
-                             (multiple-value-bind (dist extra)
-                                 (decode-huffman (cdr ht)
-                                                 old-bits old-count)
-                               ;; got dist code
-                               (copy-history bytes-to-copy (+ (aref bases dist)
-                                                              extra)))))
-                          (#.+ht-literal+
-                           (out-byte code))
-                          (#.+ht-link/end+
-                           (assert (= code 0))
-                           (assert (= extra 0))
-                           (next-state :block-end)))))))
+                (symbol-macrolet ((bases +len/dist-bases+)
+                                  (ht current-huffman-tree))
+                  (loop
+                    (multiple-value-bind (code extra type old-bits old-count)
+                        (decode-huffman (car ht) 0 nil)
+                      (ecase type
+                        (#.+ht-len/dist+
+                         ;; got a length code, read dist and copy
+                         (let ((bytes-to-copy (+ extra (aref bases code))))
+                           ;; try to read dist. decode-huffman* will
+                           ;; push BITS back onto temp before calling
+                           ;; EOI if it fails, so we can restart state
+                           ;; at len code
+                           (multiple-value-bind (dist extra)
+                               (decode-huffman (cdr ht)
+                                               old-bits old-count)
+                             ;; got dist code
+                             (copy-history bytes-to-copy (+ (aref bases dist)
+                                                            extra)))))
+                        (#.+ht-literal+
+                         (out-byte code))
+                        (#.+ht-link/end+
+                         (assert (= code 0))
+                         (assert (= extra 0))
+                         (next-state :block-end))))))
 
 ;;; end of a block, see if we are done with deflate stream
                 :block-end

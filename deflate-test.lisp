@@ -48,13 +48,15 @@
                              :boxes (make-context-boxes :end (length octets))))
            (state (make-deflate-state))
            (d #++(with-output-to-string (*standard-output*)
-                (decompress c state)
-                #++(loop for b = (read-struct 'deflate-block c)
-                         when (data b)
-                           do (loop for a across (data b)
-                                    do (format s "~2,'0x" a))
-                         until (plusp (bfinal b))))
-              (let ((d1 (decompress c state)))
+                   (decompress c state)
+                   #++(loop for b = (read-struct 'deflate-block c)
+                            when (data b)
+                              do (loop for a across (data b)
+                                       do (format s "~2,'0x" a))
+                            until (plusp (bfinal b))))
+              (let* ((tmp (make-array 1024 :element-type 'octet))
+                     (d1 (decompress c state :into tmp)))
+                (setf d1 (list (subseq tmp 0 d1)))
                 (with-output-to-string (s)
                   (loop for v in d1
                         do (loop for x across v
@@ -298,5 +300,4 @@
       (data "10 11")
       (padding "0000000000000000"))
   (deflate-test (concatenate 'string blockHeader codeCounts codeLenCodeLens codeLens data padding) "" 'format)) ;
-
 

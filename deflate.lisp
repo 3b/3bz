@@ -33,6 +33,7 @@
   ;; number of bytes left to copy (for uncompressed block, or from
   ;; history in compressed block)
   (bytes-to-copy 0 :type (unsigned-byte 16))
+  (copy-offset 0 :type (unsigned-byte 16))
 
   ;; bitstream state: we read up to 64bits at a time to try to
   ;; minimize time spent interacting with input source relative to
@@ -41,7 +42,24 @@
   ;; # of valid bits remaining in partial-bits (0 = none)
   (bits-remaining 0 :type (unsigned-byte 7))
 
-  (output-offset 0 :type fixnum))
+  ;; output state
+  (output-offset 0 :type fixnum) ;; next octet to write
+  (output-buffer (make-array 0 :element-type 'octet)
+                 :type octet-vector)
+  ;; window (only used if output buffer is filled mid-decode,
+  ;; otherwise output buffer is used directly)
+  (window nil :type (or null octet-vector))
+
+;;; status for caller:
+
+  ;; true if reached end of final block, and 'output' contains all
+  ;; decompressed data
+  (finished nil :type (or nil t))
+  ;; true if there isn't enough space in 'output' to finish
+  (output-overflow nil :type (or nil t))
+  ;; true if input is empty (or incomplete) without reaching end of
+  ;; final block
+  (input-underrun nil :type (or nil t)))
 
 
 (defmacro state-machine ((state) &body tagbody)
@@ -71,15 +89,17 @@
 
 
 (defparameter *stats* (make-hash-table))
-(defun-with-reader-contexts decompress (read-context state into) (read-context)
+(defun-with-reader-contexts decompress (read-context state) (read-context)
   (declare (optimize speed))
-  (check-type into octet-vector)
   (with-cached-state (state deflate-state save-state
                        partial-bits bits-remaining
                        current-huffman-tree
                        output-offset
                        current-state
-                       bytes-to-copy)
+                       bytes-to-copy
+                       output-buffer)
+    (setf output-overflow nil
+          input-underrun nil)
     (macrolet ((bits* (&rest sizes)
                  ;; only valid for fixed sizes, but possibly should
                  ;; allow passing +constants+ and try to eval them
@@ -94,10 +114,28 @@
                  #++ (error "eoi")
                  #++ (go :eoi)
                  `(progn
+                    (setf input-underrun t)
                     (save-state)
-                    (throw :eoi nil))))
+                    (throw :exit-loop :eoi)))
+               (eoo () ;; end of output
+                 `(let ((window-size (expt 2 15)))
+                    (declare (optimize (speed 1)))
+                    (unless (ds-window state)
+                      (setf (ds-window state)
+                            ;; extra few bytes so we can use word-size
+                            ;; copies
+                            (make-array (+ window-size 8)
+                                        :element-type 'octet)))
+                    (when (< output-offset window-size)
+                      (replace (ds-window state) (ds-window state)
+                               :start2  output-offset))
+                    (replace (ds-window state) output-buffer
+                             :start1 (max 0 (- window-size output-offset))
+                             :start2 (max 0 (- output-offset window-size)))
+                    (save-state)
+                    (throw :exit-loop :eoo))))
+
       (let ((ht-scratch (make-huffman-tree)))
-        (declare (type octet-vector into))
         (labels ((bits-avail (n)
                    (<= n bits-remaining))
                  (byte-align ()
@@ -179,98 +217,114 @@
                          r))))
 
                  (out-byte (b)
-                   (setf (aref into output-offset) b)
+                   (setf (aref output-buffer output-offset) b)
                    (setf output-offset (wrap-fixnum (1+ output-offset)))
-
                    nil)
 
                  (copy-byte-or-fail ()
                    (out-byte (bits 8)))
 
-                 #++(copy-history (count offset)
-                      (declare (ignorable count offset))
-                      (loop repeat count
-                            do (out-byte (aref into (- output-offset offset)))))
+                 (%copy-history (from to s d e count total-count offset)
+                   (declare (type (and fixnum unsigned-byte) d e)
+                            (type fixnum s)
+                            (type (and fixnum unsigned-byte)
+                                  count offset total-count))
+                   (cond
+                     ;; if copy won't fit (or oversized copy below
+                     ;; might overrun buffer), use slow path for
+                     ;; now
+                     ((> (+ d count 8)
+                         e)
+                      (loop while (< d e)
+                            while (plusp count)
+                            do (setf (aref to d)
+                                     (aref from s))
+                               (setf d (1+ d))
+                               (setf s (1+ s))
+                               (decf count)
+                               (decf total-count))
+                      ;; todo: store state so it can continue
+                      (when (plusp count)
+                        (setf bytes-to-copy total-count)
+                        (setf copy-offset offset)
+                        (setf current-state :continue-copy-history)
+                        (setf output-offset d)
+                        (setf output-overflow t)
+                        (eoo)))
+                     ;; to speed things up, we allow writing past
+                     ;; current output index (but not past end of
+                     ;; buffer), and read/write as many bytes at a
+                     ;; time as possible.
+                     ((> offset 8)
+                      (loop repeat (ceiling count 8)
+                            do (setf (nibbles:ub64ref/le to d)
+                                     (nibbles:ub64ref/le from s))
+                               (setf d (wrap-fixnum (+ d 8)))
+                               (setf s (wrap-fixnum (+ s 8)))))
+                     ((= offset 1)
+                      ;; if offset is 1, we are just repeating a
+                      ;; single byte...
+                      (loop with x of-type octet = (aref from s)
+                            repeat count
+                            do (setf (aref to d) x)
+                               (setf d (wrap-fixnum (1+ d)))))
+                     ((= offset 8)
+                      (loop with x = (nibbles:ub64ref/le from s)
+                            repeat (ceiling count 8)
+                            do (setf (nibbles:ub64ref/le to d)
+                                     x)
+                               (setf d (wrap-fixnum (+ d 8)))))
+                     ((> offset 4)
+                      (loop repeat (ceiling count 4)
+                            do (setf (nibbles:ub32ref/le to d)
+                                     (nibbles:ub32ref/le from s))
+                               (setf d (wrap-fixnum (+ d 4)))
+                               (setf s (wrap-fixnum (+ s 4)))))
+
+                     ((= offset 4)
+                      (loop with x = (nibbles:ub32ref/le from s)
+                            with xx = (dpb x (byte 32 32) x)
+                            repeat (ceiling count 8)
+                            do (setf (nibbles:ub64ref/le to d) xx)
+                               (setf d (wrap-fixnum (+ d 8)))))
+                     ((= offset 3)
+                      (loop repeat (ceiling count 2)
+                            do (setf (nibbles:ub16ref/le to d)
+                                     (nibbles:ub16ref/le from s))
+                               (setf d (wrap-fixnum (+ d 2)))
+                               (setf s (wrap-fixnum (+ s 2)))))
+                     ((= offset 2)
+                      (loop with x = (nibbles:ub16ref/le from s)
+                            with xx = (dpb x (byte 16 16) x)
+                            with xxxx = (dpb xx (byte 32 32) xx)
+                            repeat (ceiling count 8)
+                            do (setf (nibbles:ub64ref/le to d) xxxx)
+                               (setf d (wrap-fixnum (+ d 8)))))
+                     (t (error "?"))))
+
                  (copy-history (count offset)
                    (declare (type (and fixnum unsigned-byte) count offset))
-                   (let* ((n count)
-                          (o offset)
-                          (d output-offset)
-                          (s (- d o))
-                          (e (length into)))
-                     (declare (type (and fixnum unsigned-byte) d e)
-                              (type fixnum s))
-                     (cond
-                       ((< s 0)
-                        (error "no window?"))
-                       ;; if copy won't fit (or oversized copy below
-                       ;; might overrun buffer), use slow path for
-                       ;; now
-                       ((> (+ d n 8)
-                           e)
-                        (loop while (< d e)
-                              repeat n
-                              do (setf (aref into d) (aref into s))
-                                 (setf d (1+ d))
-                                 (setf s (1+ s)))
-                        ;; todo: store state so it can continue
-                        (when (< d (+ output-offset n))
-                          (error "output full")))
-                       ;; to speed things up, we allow writing past
-                       ;; current output index (but not past end of
-                       ;; buffer), and read/write as many bytes at a
-                       ;; time as possible.
-                       ((> o 8)
-                        (loop repeat (ceiling n 8)
-                              do (setf (nibbles:ub64ref/le into d)
-                                       (nibbles:ub64ref/le into s))
-                                 (setf d (wrap-fixnum (+ d 8)))
-                                 (setf s (wrap-fixnum (+ s 8)))))
-                       ((= o 1)
-                        ;; if offset is 1, we are just repeating a
-                        ;; single byte...
-                        (loop with x of-type octet = (aref into s)
-                              repeat n
-                              do (setf (aref into d) x)
-                                 (setf d (wrap-fixnum (1+ d)))))
-                       ((= o 8)
-                        (loop with x = (nibbles:ub64ref/le into s)
-                              repeat (ceiling n 8)
-                              do (setf (nibbles:ub64ref/le into d)
-                                       x)
-                                 (setf d (wrap-fixnum (+ d 8)))))
-                       ((> o 4)
-                        (loop repeat (ceiling n 4)
-                              do (setf (nibbles:ub32ref/le into d)
-                                       (nibbles:ub32ref/le into s))
-                                 (setf d (wrap-fixnum (+ d 4)))
-                                 (setf s (wrap-fixnum (+ s 4)))))
-
-                       ((= o 4)
-                        (loop with x = (nibbles:ub32ref/le into s)
-                              with xx = (dpb x (byte 32 32) x)
-                              repeat (ceiling n 8)
-                              do (setf (nibbles:ub64ref/le into d) xx)
-                                 (setf d (wrap-fixnum (+ d 8)))))
-                       ((= o 3)
-                        (loop repeat (ceiling n 2)
-                              do (setf (nibbles:ub16ref/le into d)
-                                       (nibbles:ub16ref/le into s))
-                                 (setf d (wrap-fixnum (+ d 2)))
-                                 (setf s (wrap-fixnum (+ s 2)))))
-                       ((= o 2)
-                        (loop with x = (nibbles:ub16ref/le into s)
-                              with xx = (dpb x (byte 16 16) x)
-                              with xxxx = (dpb xx (byte 32 32) xx)
-                              repeat (ceiling n 8)
-                              do (setf (nibbles:ub64ref/le into d) xxxx)
-                                 (setf d (wrap-fixnum (+ d 8)))))
-                       (t (error "?")))
+                   (let* ((d output-offset)
+                          (s (- d offset))
+                          (e (length output-buffer))
+                          (n count))
+                     (when (< s 0)
+                       (unless window
+                         (error "no window?"))
+                       (let ((c (min count (abs s))))
+                         (%copy-history window output-buffer
+                                        (+ 32768 s) d e
+                                        c count offset)
+                         (decf n c)
+                         (setf d (wrap-fixnum (+ d c))))
+                       (setf s 0))
+                     (when (plusp n)
+                       (%copy-history output-buffer output-buffer
+                                      s d e n n offset))
                      ;; D may be a bit past actual value, so calculate
                      ;; correct offset
                      (setf output-offset
-                           (wrap-fixnum (+ output-offset n)))))
-
+                           (wrap-fixnum (+ output-offset count)))))
 
                  (decode-huffman-full (ht old-bits old-count)
                    (declare (type huffman-tree ht)
@@ -413,6 +467,7 @@
                              (ht-node-type node)        ;; type
                              (ldb (byte offset 0) bits) ;; old-bits
                              offset)))                  ;; old-count
+
                  (decode-huffman (ht old-bits old-count)
                    ;; seems to be faster to just use constant than
                    ;; try to optimize for specific table?
@@ -423,14 +478,13 @@
           (declare (inline bits-avail byte-align %fill-bits %bits bits
                            out-byte copy-byte-or-fail
                            decode-huffman %decode-huffman-fast
-                           %fill-bits32)
+                           %fill-bits32 copy-history
+                           %copy-history)
                    (ignorable #'bits-avail))
-          (catch :eoi
+          (catch :exit-loop
             (state-machine (state)
               :start-of-block
               (multiple-value-bind (final type) (bits* 1 2)
-                #++
-                (format t "block start ~s ~s~%" final type)
                 (setf last-block-flag (plusp final))
                 (ecase type
                   (0 (next-state :uncompressed-block))
@@ -576,11 +630,30 @@
                            (copy-history bytes-to-copy (+ (aref bases dist)
                                                           extra)))))
                       (#.+ht-literal+
+                       (when (>= output-offset (length output-buffer))
+                         (setf current-state :out-byte)
+                         (setf bytes-to-copy code)
+                         (setf output-overflow t)
+                         (eoo))
                        (out-byte code))
                       (#.+ht-link/end+
                        (assert (= code 0))
                        (assert (= extra 0))
                        (next-state :block-end))))))
+
+              ;; continue copy if output filled up in the middle
+              :continue-copy-history
+              (copy-history bytes-to-copy copy-offset)
+              (next-state :decode-compressed-data)
+
+              :out-byte
+              (when (> output-offset (length output-buffer))
+                (when (> output-offset (length output-buffer))
+                  (error "tried to continue from overflow without providing more space in output"))
+                (setf output-overflow t)
+                (eoo))
+              (out-byte bytes-to-copy)
+              (next-state :decode-compressed-data)
 
 ;;; end of a block, see if we are done with deflate stream
               :block-end
@@ -589,5 +662,8 @@
                   (next-state :start-of-block))
 
 ;;; normal exit from state machine
-              :done)))))
+              :done
+              (setf finished t)
+;;; any exit from state machine (should set flags first)
+              :exit-loop)))))
     output-offset))

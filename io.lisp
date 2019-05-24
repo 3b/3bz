@@ -292,3 +292,15 @@
                  for n = (find-symbol (format nil "~a/~a" base-name cc)
                                       (find-package :3bz))
                  collect `(,ct (,n ,@lambda-list)))))))
+
+(defmacro with-reader-contexts ((context) &body body)
+  `(etypecase ,context
+     (octet-vector-context
+      (with-vector-context (,context)
+        ,@body))
+     (octet-pointer-context
+      (with-pointer-context (,context)
+        ,@body))
+     (octet-stream-context
+      (with-stream-context (,context)
+        ,@body))))

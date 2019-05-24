@@ -25,6 +25,10 @@
 ;; offset of length codes in extra-bits tables
 (defconstant +lengths-extra-bits-offset+ 32)
 
+(defconstant +adler32-prime+ 65521)
+
+
+
 ;; extra-bits and len/dist-bases store
 (declaim (type (simple-array (unsigned-byte 4)
                              (#. (+ 29 +lengths-extra-bits-offset+)))

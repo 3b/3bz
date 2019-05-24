@@ -666,4 +666,5 @@
               (setf finished t)
 ;;; any exit from state machine (should set flags first)
               :exit-loop)))))
+    (save-state)
     output-offset))

@@ -11,5 +11,6 @@
    (:file "constants")
    (:file "huffman-tree")
    (:file "io")
-   (:file "deflate")))
+   (:file "deflate")
+   (:file "zlib")))
 

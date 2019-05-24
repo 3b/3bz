@@ -12,5 +12,7 @@
    (:file "huffman-tree")
    (:file "io")
    (:file "deflate")
-   (:file "zlib")))
+   (:file "checksums")
+   (:file "zlib")
+   (:file "gzip")))
 

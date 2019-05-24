@@ -1,15 +1,15 @@
 Yet another CL impementation of [rfc1951
-deflate](https://tools.ietf.org/html/rfc1951) decompression, with
-support for reading from foreign pointers (for use with mmap and
-similar, etc), and from CL octet vectors and streams.
+deflate](https://tools.ietf.org/html/rfc1951) decompression
+(optionally with [rfc1950 deflate](https://tools.ietf.org/html/rfc1950)
+or [rfc1952
+gzip](https://tools.ietf.org/html/rfc1952https://tools.ietf.org/html/rfc1952)
+wrappers), with support for reading from foreign pointers (for use with
+mmap and similar, etc), and from CL octet vectors and streams.
 
-## Currently work in progress, you probably don't want to use this unless you want to help finish it.
+### Still somewhat WIP, but approaching usability.
 
-seems to read more bitstreams than chipz (possibly slightly
-faster as well), but still needs lots of work on performance.
+Performance is somewhere between FFI to libz and chipz, still needs
+some low-level optimization of copy routines and checksums.
 
-API and error handling are currently very limited as well.
-
-If performance improves enough to be useful, will probably add support
-for zlib/gzip headers and checksums, as well as more flexible
-APIs. Possibly also some other compression formats.
+API isn't completely stable yet, needs some actual use to figure out
+the details.

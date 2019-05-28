@@ -500,12 +500,30 @@
               :uncompressed-block
               (byte-align)
               (multiple-value-bind (s n) (bits* 16 16)
-
                 (assert (= n (ldb (byte 16 0) (lognot s))))
                 (setf bytes-to-copy s)
                 (next-state :copy-block))
               :copy-block
-              ;; todo: optimize this
+              (loop while (and (plusp bits-remaining)
+                               (plusp bytes-to-copy))
+                    do (out-byte (bits 8))
+                       (decf bytes-to-copy))
+              (loop with e = (- (length output-buffer) 8)
+                    while (and (> bytes-to-copy 8)
+                               (< output-offset e))
+                    do (multiple-value-bind (w c) (word64)
+                         (cond
+                           ((= 8 c)
+                            (setf (nibbles:ub64ref/le output-buffer
+                                                      output-offset)
+                                  w)
+                            (setf output-offset
+                                  (wrap-fixnum (+ output-offset 8)))
+                            (decf bytes-to-copy 8))
+                           ((plusp c)
+                            (loop for i below c
+                                  do (out-byte (ldb (byte 8 (* i 8)) w))))
+                           (t (eoo)))))
               (loop while (plusp bytes-to-copy)
                     do (copy-byte-or-fail)
                        (decf bytes-to-copy))

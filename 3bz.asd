@@ -7,8 +7,8 @@
   :components
   ((:file "package")
    (:file "util")
-   (:file "types")
    (:file "constants")
+   (:file "types")
    (:file "huffman-tree")
    (:file "io")
    (:file "deflate")

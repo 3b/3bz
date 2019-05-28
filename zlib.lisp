@@ -127,7 +127,9 @@
             (:header2
              (dictid))
             (:adler
-             (adler)))
+             (adler)
+             (setf zlib-state nil)
+             (return-from decompress-zlib output-offset)))
           (setf zlib-state nil))
         (unless zlib-state
           (decompress read-context state)

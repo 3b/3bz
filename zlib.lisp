@@ -121,6 +121,7 @@
                (when dict
                  (setf zlib-state :header2)
                  (dictid))
+               #++
                (format t "zlib header: method ~s, level ~s, window ~s, dict ~s~%"
                        compression-method compression-level window-size dict-id)))
             (:header2
@@ -129,7 +130,7 @@
              (adler)))
           (setf zlib-state nil))
         (unless zlib-state
-          (print (decompress read-context state))
+          (decompress read-context state)
           (when (or finished output-overflow)
             (update-checksum))
           (when finished

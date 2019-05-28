@@ -3,51 +3,47 @@
 (defun adler32 (buf end s1 s2)
   (declare (type octet-vector buf)
            (type (unsigned-byte 16) s1 s2)
+           (type fixnum end)
            (optimize speed))
   ;; with 32bit accumulators, we need to do the MOD every 5552 adds.
   ;; with 64bit, every 380368439.  formula = (+ (* (1+ n) 65520) (* (/
   ;; (* n (1+ n)) 2) 255))
-  (let* ((unroll 16) ;; adjust UNROLL call below if changing this
+  (let* ((unroll #1=32)
          (chunk-size ;(* unroll (floor 5552 unroll))
            (* unroll (floor 380368439 unroll)))
          (s1 s1)
          (s2 s2))
     (declare (type (unsigned-byte 64) s1 s2))
-
     (assert (<= end (length buf)))
-    (unless (zerop end)
-      (loop
-        with start fixnum = 0
-        for c fixnum = (max 0
-                            (min chunk-size
-                                 (- end start)))
-        do (macrolet ((a (i)
-                        `(progn
-                           (setf s1 (ldb (byte 64 0)
-                                         (+ s1
-                                            (locally
-                                                (declare (optimize (safety 0)))
-                                              (aref buf ,i)))))
-                           (setf s2 (ldb (byte 64 0) (+ s2 s1)))))
-                      (unroll (n)
-                        `(progn
-                           ,@(loop for x below n
-                                   collect `(a (+ i ,x))))))
-             (if (and (zerop (mod c unroll))
-                      (plusp c))
-                 (loop for i of-type fixnum from start
-                         below (min (+ start c)
-                                    (* unroll (floor (length buf) unroll)))
-                       by unroll
-                       do (unroll 16)) ;; adjust variable above if changing
-                 (loop for i fixnum from start below (min (+ start c)
-                                                          (length buf))
-                       do (a i))))
-           (incf start c)
-           (setf s1 (mod s1 +adler32-prime+)
-                 s2 (mod s2 +adler32-prime+))
-        while (< start end)))
-    (values s1 s2)))
+    (macrolet ((a (i)
+                 `(progn
+                    (incf (ldb (byte 64 0) s1)
+                          (locally
+                              (declare (optimize (safety 0)))
+                            (aref buf ,i)))
+                    (incf (ldb (byte 64 0) s2) s1)))
+               (unroll (n)
+                 `(progn
+                    ,@(loop for x below n
+                            collect `(a (+ i ,x))))))
+      (loop with i fixnum = 0
+            while (> (- end i) #1#)
+            for c fixnum = (+ i (min (* #1# (floor end #1#))
+                                     chunk-size))
+            do (loop while (< i c)
+                     do (unroll #1#)
+                        (locally (declare (optimize (safety 0)))
+                          (incf i #1#)))
+               (setf s1 (mod s1 +adler32-prime+)
+                     s2 (mod s2 +adler32-prime+))
+            finally (progn
+                      (assert (<= i end))
+                      (loop for i from i below end
+                            do (a i))))
+      (setf s1 (mod s1 +adler32-prime+)
+            s2 (mod s2 +adler32-prime+)))
+    (locally (declare (type (unsigned-byte 16) s1 s2))
+      (values s1 s2))))
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)

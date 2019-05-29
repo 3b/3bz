@@ -14,5 +14,6 @@
    (:file "deflate")
    (:file "checksums")
    (:file "zlib")
-   (:file "gzip")))
+   (:file "gzip")
+   (:file "api")))
 

@@ -132,7 +132,7 @@
              (return-from decompress-zlib output-offset)))
           (setf zlib-state nil))
         (unless zlib-state
-          (decompress read-context state)
+          (decompress-deflate read-context state)
           (when (or finished output-overflow)
             (update-checksum))
           (when finished

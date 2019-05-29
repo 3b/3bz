@@ -53,9 +53,30 @@
   ((octet-vector :reader octet-vector :initarg :octet-vector)
    (boxes :reader boxes :initarg :boxes)))
 
+(defun make-octet-vector-context (vector &key (start 0) (offset 0)
+                                           (end (length vector)))
+  (make-instance 'octet-vector-context
+                 :octet-vector vector
+                 :boxes (make-context-boxes
+                         :start start :offset offset :end end)))
+
 (defclass octet-stream-context ()
   ((octet-stream :reader octet-stream :initarg :octet-stream)
    (boxes :reader boxes :initarg :boxes)))
+
+(defun make-octet-stream-context (file-stream &key (start 0) (offset 0)
+                                                (end (file-length file-stream)))
+  (make-instance 'octet-stream-context
+                 :octet-stream file-stream
+                 :boxes (make-context-boxes
+                         :start start :offset offset :end end)))
+
+;; hack to allow storing parts of a file to use as context later. call
+;; before using context
+(defmethod %resync-file-stream (context))
+(defmethod %resync-file-stream ((context octet-stream-context))
+  (file-position (octet-stream context)
+                 (cb-offset (boxes context))))
 
 (defun valid-octet-stream (os)
   (and (typep os 'stream)
@@ -89,6 +110,14 @@
    (pointer :reader %pointer :initarg :pointer)
    (boxes :reader boxes :initarg :boxes)))
 
+(defun make-octet-pointer-context (octet-pointer
+                                   &key (start 0) (offset 0)
+                                     (end (size octet-pointer)))
+  (make-instance 'octet-pointer-context
+                 :op octet-pointer
+                 :pointer (base octet-pointer)
+                 :boxes (make-context-boxes
+                         :start start :offset offset :end end)))
 
 (defmacro with-vector-context ((context) &body body)
   (with-gensyms (boxes vector)
@@ -101,11 +130,7 @@
          (check-type ,vector octet-vector)
          (locally (declare (type octet-vector ,vector))
            (context-common (,boxes)
-             (macrolet ((octet (&optional (eob-form
-                                           '(error "read past end of buffer")))
-                          `(%octet (aref ,',vector (pos))
-                                   ,eob-form))
-                        ;; read up to 8 octets in LE order, return
+             (macrolet (;; read up to 8 octets in LE order, return
                         ;; result + # of octets read as multiple
                         ;; values
                         (word64 ()
@@ -165,18 +190,6 @@
            (macrolet (;; override POS/SET-POS for streams
                       (pos ()
                         `(file-position ,',stream))
-                      (octet (&optional (eob-form
-                                         '(error "read past end of buffer")))
-                        (with-gensyms (p)
-                          `(progn
-                             ;; go through some extra work to avoid
-                             ;; optimization notes..
-                             (let ((,p (pos)))
-                               (when ,p
-                                 (locally (declare (type size-t ,p))
-                                   (when (>= ,p (end))
-                                     ,eob-form))))
-                             (read-byte ,',stream))))
                       (word64 ()
                         (with-gensyms (available result)
                           `(locally (declare (optimize (speed 1)))
@@ -219,11 +232,7 @@
                   (type context-boxes ,boxes))
          (assert (valid-octet-pointer (op ,context)))
          (context-common (,boxes)
-           (macrolet ((octet (&optional (eob-form
-                                         '(error "read past end of buffer")))
-                        `(%octet (cffi:mem-ref ,',pointer :uint8 (pos))
-                                 ,eob-form))
-                      (word64 ()
+           (macrolet ((word64 ()
                         (with-gensyms (available result)
                           `(let ((,available (octets-left)))
                              (if (>= ,available 8)

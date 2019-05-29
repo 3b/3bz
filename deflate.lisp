@@ -89,7 +89,8 @@
 
 
 (defparameter *stats* (make-hash-table))
-(defun-with-reader-contexts decompress (read-context state) (read-context)
+(defun-with-reader-contexts decompress-deflate (read-context state)
+    (read-context)
   (declare (optimize speed))
   (with-cached-state (state deflate-state save-state
                        partial-bits bits-remaining

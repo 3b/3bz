@@ -271,7 +271,7 @@
                 (len)
                 (return-from decompress-gzip output-offset)))
              (unless gzip-state
-               (decompress read-context state)
+               (decompress-deflate read-context state)
                (when (or finished output-overflow)
                  (update-checksum))
                (when finished

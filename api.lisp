@@ -10,7 +10,8 @@
      (decompress-deflate context state))))
 
 (defun replace-output-buffer (state buffer)
-  (unless (ds-output-overflow state)
+  (unless (or (zerop (ds-output-offset state))
+              (ds-output-overflow state))
     ;; we don't create/fill window until output buffer overflows, so
     ;; would need to do that here. error for now until someone needs
     ;; that ability...

@@ -203,7 +203,7 @@
                                        for i fixnum below (min 8 ,available)
                                        do (setf (ldb (byte 8 (* i 8))
                                                      ,result)
-                                                (octet)))
+                                                (read-byte ,',stream)))
                                      (values ,result ,available)))))))
                       (word32 ()
                         (with-gensyms (available result)
@@ -218,7 +218,7 @@
                                        for i fixnum below (min 4 ,available)
                                        do (setf (ldb (byte 8 (* i 8))
                                                      ,result)
-                                                (octet)))
+                                                (read-byte ,',stream)))
                                      (values ,result ,available))))))))
              ,@body))))))
 

@@ -4,6 +4,12 @@
                 #:with-gensyms
                 #:once-only
                 #:ensure-list)
+
+  (:import-from #+mezzano #:mezzano.internals
+                #-mezzano #:nibbles
+                #:ub16ref/le
+                #:ub32ref/le
+                #:ub64ref/le)
   (:export
    #:decompress
    #:decompress-vector

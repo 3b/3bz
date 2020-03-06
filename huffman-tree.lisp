@@ -80,7 +80,9 @@
     (nodes (make-array +max-tree-size+
                        :element-type 'ht-node-type
                        :initial-element (ht-invalid-node))
-     :type ht-node-array-type)))
+     :type ht-node-array-type))
+  (defmethod make-load-form ((object huffman-tree) &optional environment)
+    (make-load-form-saving-slots object :environment environment)))
 
 (defparameter *fixed-lit/length-table*
   (concatenate 'code-table-type

@@ -70,9 +70,10 @@
                (ash value 6)
                (ash (aref extra-bits value) 2))))
 
-(defun ht-invalid-node () #xffff)
-(defun ht-end-node () #x0001)
 (eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun ht-invalid-node () #xffff)
+  (defun ht-end-node () #x0001)
+
   (declaim (inline ht-max-bits ht-start-bits))
   (defstruct (huffman-tree (:conc-name ht-))
     (start-bits 0 :type ht-bit-count-type)
@@ -330,18 +331,18 @@
 #++
 (build-tree +static-huffman-tree+ *fixed-lit/length-table* *fixed-dist-table*)
 #++(dump-tree +static-huffman-tree+)
-(defconstant +static-huffman-tree/len+ (if (boundp '+static-huffman-tree/len+)
-                                           +static-huffman-tree/len+
-                                           (make-huffman-tree)))
-(defconstant +static-huffman-tree/dist+ (if (boundp '+static-huffman-tree/dist+)
-                                            +static-huffman-tree/dist+
-                                            (make-huffman-tree)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defconstant +static-huffman-tree/len+ (if (boundp '+static-huffman-tree/len+)
+                                             +static-huffman-tree/len+
+                                             (make-huffman-tree)))
+  (defconstant +static-huffman-tree/dist+ (if (boundp '+static-huffman-tree/dist+)
+                                              +static-huffman-tree/dist+
+                                              (make-huffman-tree))))
 
 (build-trees +static-huffman-tree/len+
              +static-huffman-tree/dist+
              *fixed-lit/length-table* *fixed-dist-table*)
-
-(alexandria:define-constant +static-huffman-trees+
-    (cons +static-huffman-tree/len+ +static-huffman-tree/dist+)
-  :test 'equal)
-
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (alexandria:define-constant +static-huffman-trees+
+      (cons +static-huffman-tree/len+ +static-huffman-tree/dist+)
+    :test 'equalp))

@@ -23,7 +23,8 @@
 ;; last valid length (there are some extra unused values to fill tree)
 (defconstant +lengths-end+ 285)
 ;; offset of length codes in extra-bits tables
-(defconstant +lengths-extra-bits-offset+ 32)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defconstant +lengths-extra-bits-offset+ 32))
 
 (defconstant +adler32-prime+ 65521)
 
@@ -59,11 +60,11 @@
                    115 131 163 195 227 258))
   :test 'equalp)
 
-(declaim (type (simple-array octet (19)) +len-code-order+))
+(declaim (type (simple-array (unsigned-byte 8) (19)) +len-code-order+))
 
 (alexandria:define-constant +len-code-order+
     (coerce #(16 17 18 0 8 7 9 6 10 5 11 4 12 3 13 2 14 1 15)
-            '(simple-array octet (19)))
+            '(simple-array (unsigned-byte 8) (19)))
   :test 'equalp)
 (declaim (type (simple-array (unsigned-byte 4) (19)) +len-code-extra+))
 (alexandria:define-constant +len-code-extra+

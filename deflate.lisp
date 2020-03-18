@@ -148,15 +148,23 @@
                  ;; called when temp is empty, read bits and update
                  ;; remaining
                  (%fill-bits ()
+                   #+64-bit-cpu
                    (multiple-value-bind (input octets)
                        (word64)
                      (declare (type (mod 9) octets))
                      (setf bits-remaining (* 8 octets)
+                           partial-bits input))
+                   #-64-bit-cpu
+                   (multiple-value-bind (input octets)
+                       (word32)
+                     (declare (type (mod 5) octets))
+                     (setf bits-remaining (* 4 octets)
                            partial-bits input)))
                  (%fill-bits32 (n)
                    (multiple-value-bind (input octets)
                        (word32)
-                     (declare (type (mod 5) octets))
+                     (declare (type (mod 5) octets)
+                              (type (unsigned-byte 32) input))
                      (setf partial-bits
                            (logior
                             (ash (ldb (byte 32 0) input)
@@ -186,10 +194,11 @@
                    ;; try to read (up to) 64 bits from input
                    ;; (returns 0 in OCTETS if no more input)
                    (multiple-value-bind (input octets)
-                       (word64)
+                       #+64-bit-cpu (word64) #-64-bit-cpu (word32)
                      (declare (type (mod 9) octets)
-                              (type (unsigned-byte 6) bits-remaining))
-                     (let* ((bits (* octets 8))
+                              (type (unsigned-byte 6) bits-remaining)
+                              (type (unsigned-byte #+64-bit-cpu 64 #-64-bit-cpu 32) input))
+                     (let* ((bits (* octets #+64-bit-cpu 8 #-64-bit-cpu 4))
                             (total (+ bits-remaining bits)))
                        ;; didn't read enough bits, save any bits we
                        ;; did get for later, then fail
@@ -255,6 +264,7 @@
                      ;; current output index (but not past end of
                      ;; buffer), and read/write as many bytes at a
                      ;; time as possible.
+                     #+64-bit-cpu
                      ((> offset 8)
                       (loop repeat (ceiling count 8)
                             do (setf (ub64ref/le to d)
@@ -268,6 +278,7 @@
                             repeat count
                             do (setf (aref to d) x)
                                (setf d (wrap-fixnum (1+ d)))))
+                     #+64-bit-cpu
                      ((= offset 8)
                       (loop with x = (ub64ref/le from s)
                             repeat (ceiling count 8)
@@ -280,19 +291,26 @@
                                      (ub32ref/le from s))
                                (setf d (wrap-fixnum (+ d 4)))
                                (setf s (wrap-fixnum (+ s 4)))))
-
+                     #+64-bit-cpu
                      ((= offset 4)
                       (loop with x = (ub32ref/le from s)
                             with xx = (dpb x (byte 32 32) x)
                             repeat (ceiling count 8)
                             do (setf (ub64ref/le to d) xx)
                                (setf d (wrap-fixnum (+ d 8)))))
+                     #-64-bit-cpu
+                     ((= offset 4)
+                      (loop with x = (ub32ref/le from s)
+                            repeat (ceiling count 4)
+                            do (setf (ub32ref/le to d) x)
+                               (setf d (wrap-fixnum (+ d 4)))))
                      ((= offset 3)
                       (loop repeat (ceiling count 2)
                             do (setf (ub16ref/le to d)
                                      (ub16ref/le from s))
                                (setf d (wrap-fixnum (+ d 2)))
                                (setf s (wrap-fixnum (+ s 2)))))
+                     #+64-bit-cpu
                      ((= offset 2)
                       (loop with x = (ub16ref/le from s)
                             with xx = (dpb x (byte 16 16) x)
@@ -300,6 +318,13 @@
                             repeat (ceiling count 8)
                             do (setf (ub64ref/le to d) xxxx)
                                (setf d (wrap-fixnum (+ d 8)))))
+                     #-64-bit-cpu
+                     ((= offset 2)
+                      (loop with x = (ub16ref/le from s)
+                            with xx = (dpb x (byte 16 16) x)
+                            repeat (ceiling count 4)
+                            do (setf (ub32ref/le to d) xx)
+                               (setf d (wrap-fixnum (+ d 4)))))
                      (t (error "?"))))
 
                  (copy-history (count offset)
@@ -511,8 +536,9 @@
               (loop with e = (- (length output-buffer) 8)
                     while (and (> bytes-to-copy 8)
                                (< output-offset e))
-                    do (multiple-value-bind (w c) (word64)
+                    do (multiple-value-bind (w c) #+64-bit-cpu (word64) #-64-bit-cpu (word32)
                          (cond
+                           #+64-bit-cpu
                            ((= 8 c)
                             (setf (ub64ref/le output-buffer
                                                       output-offset)
@@ -520,6 +546,14 @@
                             (setf output-offset
                                   (wrap-fixnum (+ output-offset 8)))
                             (decf bytes-to-copy 8))
+                           #-64-bit-cpu
+                           ((= 4 c)
+                            (setf (ub32ref/le output-buffer
+                                              output-offset)
+                                  w)
+                            (setf output-offset
+                                  (wrap-fixnum (+ output-offset 4)))
+                            (decf bytes-to-copy 4))
                            ((plusp c)
                             (loop for i below c
                                   do (out-byte (ldb (byte 8 (* i 8)) w))))

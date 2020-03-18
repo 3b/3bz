@@ -99,7 +99,7 @@
                                  (let ((,result 0))
                                    (declare (type (unsigned-byte 32) ,result))
                                    (loop
-                                     for i fixnum below (min 4 ,available)
+                                     for i of-type (unsigned-byte 2) below (min 4 ,available)
                                      do (setf ,result
                                               (ldb (byte 32 0)
                                                    (logior

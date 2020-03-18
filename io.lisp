@@ -45,7 +45,7 @@
                                      (values ,result 4))
                                    (let ((,result 0))
                                      (loop
-                                       for i fixnum below ,available
+                                       for i of-type (unsigned-byte 2) below (min 4 ,available)
                                        do (setf ,result
                                                 (ldb (byte 32 0)
                                                      (logior

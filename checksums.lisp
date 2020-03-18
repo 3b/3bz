@@ -15,17 +15,14 @@
           until (< (- n2 n1) 2)
           finally (return n1))))
 
-;; ub64 is faster on 64bit sbcl
-#+ (and sbcl x86-64)
-(defun adler32 (buf end s1 s2)
+(defun adler32/ub64 (buf end s1 s2)
   (declare (type octet-vector buf)
            (type (unsigned-byte 16) s1 s2)
            (type fixnum end)
            (optimize speed))
-  ;; with 32bit accumulators, we need to do the MOD every 5552 adds.
-  ;; with 64bit, every 380368439.  formula = (+ (* (1+ n) 65520) (* (/
-  ;; (* n (1+ n)) 2) 255))
-  (let* ((unroll #1=32)
+  ;; with 64bit accumulators, we need to do the MOD every 380368439
+  ;; adds. formula = (+ (* (1+ n) 65520) (* (/ (* n (1+ n)) 2) 255))
+  (let* ((unroll #1=#.+adler32-unroll+)
          (chunk-size ;(* unroll (floor 5552 unroll))
            (* unroll (floor 380368439 unroll)))
          (s1 s1)
@@ -62,9 +59,6 @@
     (locally (declare (type (unsigned-byte 16) s1 s2))
       (values s1 s2))))
 
-;; use fixnum version elsewhere
-;; fastest on mezzano, ccl64
-#- (or (and sbcl x86-64))
 (progn
   (eval-when (:compile-toplevel :load-toplevel :execute)
     (defconstant +accumulate-count+
@@ -85,13 +79,12 @@
   ;; need at least 20 or so bits of accumulator, and add a few more so
   ;; we can unroll
   (assert (> +accumulate-count+ 100))
- (defun adler32 (buf end s1 s2)
+ (defun adler32/fixnum (buf end s1 s2)
    (declare (type octet-vector buf)
             (type (unsigned-byte 16) s1 s2)
             (type non-negative-fixnum end)
             (optimize speed))
-   (let* (#+mezzano (unroll #1=5)
-          #-mezzano (unroll #1=8)
+   (let* ((unroll #1=#.+adler32-unroll+)
           (chunk-size
             (* unroll (floor +accumulate-count+ unroll)))
           (s1 s1)
@@ -125,15 +118,13 @@
      (locally (declare (type (unsigned-byte 16) s1 s2))
        (values s1 s2)))))
 
-;; ub32 version
-#++
-(defun adler32 (buf end s1 s2)
+(defun adler32/ub32 (buf end s1 s2)
   (declare (type octet-vector buf)
            (type (unsigned-byte 16) s1 s2)
            (type fixnum end)
            (optimize speed ))
   ;; with 32bit accumulators, we need to do the MOD every 5552 adds.
-  (let* ((unroll #2=32)
+  (let* ((unroll #1=#.+adler32-unroll+)
          (chunk-size (* unroll (floor 5552 unroll)))
          (s1 s1)
          (s2 s2))
@@ -148,13 +139,13 @@
                     ,@(loop for x below n
                             collect `(a (+ i ,x))))))
       (loop with i fixnum = 0
-            while (> (- end i) #2#)
-            for c fixnum = (+ i (min (* #2# (floor (- end i) #2#))
+            while (> (- end i) #1#)
+            for c fixnum = (+ i (min (* #1# (floor (- end i) #1#))
                                       chunk-size))
             do (loop while (< i c)
-                     do (unroll #2#)
+                     do (unroll #1#)
                         (locally (declare (optimize (safety 0)))
-                          (incf i #2#)))
+                          (incf i #1#)))
                (setf s1 (mod s1 +adler32-prime+)
                      s2 (mod s2 +adler32-prime+))
             finally (progn
@@ -165,6 +156,16 @@
             s2 (mod s2 +adler32-prime+)))
     (locally (declare (type (unsigned-byte 16) s1 s2))
       (values s1 s2))))
+
+(declaim (inline adler32))
+(defun adler32 (buf end s1 s2)
+  #+#.(3bz::use-adler32 :ub64)
+  (adler32/ub64 buf end s1 s2)
+  #+#.(3bz::use-adler32 :fixnum)
+  (adler32/fixnum buf end s1 s2)
+  #+#.(3bz::use-adler32 :ub32)
+  (adler32/ub32 buf end s1 s2))
+
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun generate-crc32-table ()

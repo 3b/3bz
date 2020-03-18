@@ -10,6 +10,7 @@
   :author "Bart Botta <00003b at gmail.com>"
   :components
   ((:file "package")
+   (:file "tuning")
    (:file "util")
    (:file "constants")
    (:file "types")

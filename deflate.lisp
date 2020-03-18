@@ -148,13 +148,13 @@
                  ;; called when temp is empty, read bits and update
                  ;; remaining
                  (%fill-bits ()
-                   #+64-bit-cpu
+                   #+#.(3bz::use-ub64)
                    (multiple-value-bind (input octets)
                        (word64)
                      (declare (type (mod 9) octets))
                      (setf bits-remaining (* 8 octets)
                            partial-bits input))
-                   #-64-bit-cpu
+                   #-#.(3bz::use-ub64)
                    (multiple-value-bind (input octets)
                        (word32)
                      (declare (type (mod 5) octets))
@@ -194,10 +194,10 @@
                    ;; try to read (up to) 64 bits from input
                    ;; (returns 0 in OCTETS if no more input)
                    (multiple-value-bind (input octets)
-                       #+64-bit-cpu (word64) #-64-bit-cpu (word32)
+                       #+#.(3bz::use-ub64) (word64) #-#.(3bz::use-ub64) (word32)
                      (declare (type (mod 9) octets)
                               (type (unsigned-byte 6) bits-remaining)
-                              (type (unsigned-byte #+64-bit-cpu 64 #-64-bit-cpu 32) input))
+                              (type (unsigned-byte #+#.(3bz::use-ub64) 64 #-#.(3bz::use-ub64) 32) input))
                      (let* ((bits (* octets 8))
                             (total (+ bits-remaining bits)))
                        ;; didn't read enough bits, save any bits we
@@ -264,7 +264,7 @@
                      ;; current output index (but not past end of
                      ;; buffer), and read/write as many bytes at a
                      ;; time as possible.
-                     #+64-bit-cpu
+                     #+#.(3bz::use-ub64)
                      ((> offset 8)
                       (loop repeat (ceiling count 8)
                             do (setf (ub64ref/le to d)
@@ -278,7 +278,7 @@
                             repeat count
                             do (setf (aref to d) x)
                                (setf d (wrap-fixnum (1+ d)))))
-                     #+64-bit-cpu
+                     #+#.(3bz::use-ub64)
                      ((= offset 8)
                       (loop with x = (ub64ref/le from s)
                             repeat (ceiling count 8)
@@ -291,14 +291,14 @@
                                      (ub32ref/le from s))
                                (setf d (wrap-fixnum (+ d 4)))
                                (setf s (wrap-fixnum (+ s 4)))))
-                     #+64-bit-cpu
+                     #+#.(3bz::use-ub64)
                      ((= offset 4)
                       (loop with x = (ub32ref/le from s)
                             with xx = (dpb x (byte 32 32) x)
                             repeat (ceiling count 8)
                             do (setf (ub64ref/le to d) xx)
                                (setf d (wrap-fixnum (+ d 8)))))
-                     #-64-bit-cpu
+                     #-#.(3bz::use-ub64)
                      ((= offset 4)
                       (loop with x = (ub32ref/le from s)
                             repeat (ceiling count 4)
@@ -310,7 +310,7 @@
                                      (ub16ref/le from s))
                                (setf d (wrap-fixnum (+ d 2)))
                                (setf s (wrap-fixnum (+ s 2)))))
-                     #+64-bit-cpu
+                     #+#.(3bz::use-ub64)
                      ((= offset 2)
                       (loop with x = (ub16ref/le from s)
                             with xx = (dpb x (byte 16 16) x)
@@ -318,7 +318,7 @@
                             repeat (ceiling count 8)
                             do (setf (ub64ref/le to d) xxxx)
                                (setf d (wrap-fixnum (+ d 8)))))
-                     #-64-bit-cpu
+                     #-#.(3bz::use-ub64)
                      ((= offset 2)
                       (loop with x = (ub16ref/le from s)
                             with xx = (dpb x (byte 16 16) x)
@@ -536,9 +536,9 @@
               (loop with e = (- (length output-buffer) 8)
                     while (and (> bytes-to-copy 8)
                                (< output-offset e))
-                    do (multiple-value-bind (w c) #+64-bit-cpu (word64) #-64-bit-cpu (word32)
+                    do (multiple-value-bind (w c) #+#.(3bz::use-ub64) (word64) #-#.(3bz::use-ub64) (word32)
                          (cond
-                           #+64-bit-cpu
+                           #+#.(3bz::use-ub64)
                            ((= 8 c)
                             (setf (ub64ref/le output-buffer
                                                       output-offset)
@@ -546,7 +546,7 @@
                             (setf output-offset
                                   (wrap-fixnum (+ output-offset 8)))
                             (decf bytes-to-copy 8))
-                           #-64-bit-cpu
+                           #-#.(3bz::use-ub64)
                            ((= 4 c)
                             (setf (ub32ref/le output-buffer
                                               output-offset)

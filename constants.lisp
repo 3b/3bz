@@ -1,9 +1,5 @@
 (in-package 3bz)
 
-#+ (and (or x86-64 ppc64 sparc64 hppa64)
-        (not ccl))
-(pushnew :64-bit-cpu *features*)
-
 ;; libz says these are enough entries for zlib as specified
 (defconstant +max-tree-entries/len+ 852)
 (defconstant +max-tree-entries/dist+ 592)

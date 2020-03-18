@@ -1,6 +1,4 @@
 (in-package 3bz)
-
-
 #++
 (let ((max (1- (expt 2 29))))
   (flet ((s (n)
@@ -17,68 +15,8 @@
           until (< (- n2 n1) 2)
           finally (return n1))))
 
-
-(progn
-  (eval-when (:compile-toplevel :load-toplevel :execute)
-    (defconstant +accumulate-count+
-      (let ((max most-positive-fixnum))
-        (flet ((s (n)
-                 (+ (* (1+ n) 65520)
-                    (* (/ (* n (1+ n)) 2) 255))))
-          (loop with n1 = 0
-                with n = (/ max 2)
-                with n2 = max
-                when (>= (s n) max)
-                  do (psetf n (floor (+ n n1) 2)
-                            n2 n)
-                else do (psetf n (floor (+ n n2) 2)
-                            n1 n)
-                until (< (- n2 n1) 2)
-                finally (return n1))))))
-  ;; need at least 20 or so bits of accumulator, and add a few more so
-  ;; we can unroll
-  (assert (> +accumulate-count+ 100))
- (defun adler32 (buf end s1 s2)
-   (declare (type octet-vector buf)
-            (type (unsigned-byte 16) s1 s2)
-            (type fixnum end)
-            (optimize speed))
-   (let* ((unroll #1=32)
-          (chunk-size
-            (* unroll (floor +accumulate-count+ unroll)))
-          (s1 s1)
-          (s2 s2))
-     (declare (type fixnum s1 s2))
-     (assert (<= end (length buf)))
-     (macrolet ((a (i)
-                  `(progn
-                    (setf s1 (the fixnum (+ s1 (aref buf (the fixnum ,i)))))
-                    (setf s2 (the fixnum (+ s2 s1)))))
-                (unroll (n)
-                  `(progn
-                     ,@(loop for x below n
-                             collect `(a (+ i ,x))))))
-       (loop with i fixnum = 0
-             while (> (- end i) #1#)
-             for c fixnum = (+ i (min (* #1# (floor (- end i) #1#))
-                                      chunk-size))
-             do (loop while (< i c)
-                      do (unroll #1#)
-                         (locally (declare (optimize (safety 0)))
-                           (incf i #1#)))
-                (setf s1 (mod s1 +adler32-prime+)
-                      s2 (mod s2 +adler32-prime+))
-             finally (progn
-                       (assert (<= i end))
-                       (loop for i from i below end
-                             do (a i))))
-       (setf s1 (mod s1 +adler32-prime+)
-             s2 (mod s2 +adler32-prime+)))
-     (locally (declare (type (unsigned-byte 16) s1 s2))
-       (values s1 s2)))))
-
-;; ub64 version
-#++
+;; ub64 is faster on 64bit sbcl
+#+ (and sbcl x86-64)
 (defun adler32 (buf end s1 s2)
   (declare (type octet-vector buf)
            (type (unsigned-byte 16) s1 s2)
@@ -123,6 +61,68 @@
             s2 (mod s2 +adler32-prime+)))
     (locally (declare (type (unsigned-byte 16) s1 s2))
       (values s1 s2))))
+
+;; use fixnum version elsewhere
+#- (and sbcl x86-64)
+(progn
+  (eval-when (:compile-toplevel :load-toplevel :execute)
+    (defconstant +accumulate-count+
+      (let ((max most-positive-fixnum))
+        (flet ((s (n)
+                 (+ (* (1+ n) 65520)
+                    (* (/ (* n (1+ n)) 2) 255))))
+          (loop with n1 = 0
+                with n = (/ max 2)
+                with n2 = max
+                when (>= (s n) max)
+                  do (psetf n (floor (+ n n1) 2)
+                            n2 n)
+                else do (psetf n (floor (+ n n2) 2)
+                            n1 n)
+                until (< (- n2 n1) 2)
+                finally (return n1))))))
+  ;; need at least 20 or so bits of accumulator, and add a few more so
+  ;; we can unroll
+  (assert (> +accumulate-count+ 100))
+ (defun adler32 (buf end s1 s2)
+   (declare (type octet-vector buf)
+            (type (unsigned-byte 16) s1 s2)
+            (type non-negative-fixnum end)
+            (optimize speed))
+   (let* (#+mezzano (unroll #1=5)
+          #-mezzano (unroll #1=8)
+          (chunk-size
+            (* unroll (floor +accumulate-count+ unroll)))
+          (s1 s1)
+          (s2 s2))
+     (declare (type non-negative-fixnum s1 s2))
+     (assert (<= end (length buf)))
+     (macrolet ((a (i)
+                  `(progn
+                    (setf s1 (the fixnum (+ s1 (aref buf (the fixnum ,i)))))
+                    (setf s2 (the fixnum (+ s2 s1)))))
+                (unroll (n)
+                  `(progn
+                     ,@(loop for x below n
+                             collect `(a (+ i ,x))))))
+       (loop with i of-type non-negative-fixnum = 0
+             while (> (- end i) #1#)
+             for c fixnum = (+ i (min (* #1# (floor (- end i) #1#))
+                                      chunk-size))
+             do (loop while (< i c)
+                      do (unroll #1#)
+                         (locally (declare (optimize (safety 0)))
+                           (incf i #1#)))
+                (setf s1 (mod s1 +adler32-prime+)
+                      s2 (mod s2 +adler32-prime+))
+             finally (progn
+                       (assert (<= i end))
+                       (loop for i from i below end
+                             do (a i))))
+       (setf s1 (mod s1 +adler32-prime+)
+             s2 (mod s2 +adler32-prime+)))
+     (locally (declare (type (unsigned-byte 16) s1 s2))
+       (values s1 s2)))))
 
 ;; ub32 version
 #++

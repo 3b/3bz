@@ -226,10 +226,9 @@
                    (out-byte (bits 8)))
 
                  (%copy-history (from to s d e count total-count offset)
-                   (declare (type (and fixnum unsigned-byte) d e)
+                   (declare (type non-negative-fixnum d e)
                             (type fixnum s)
-                            (type (and fixnum unsigned-byte)
-                                  count offset total-count))
+                            (type non-negative-fixnum count offset total-count))
                    (cond
                      ;; if copy won't fit (or oversized copy below
                      ;; might overrun buffer), use slow path for
@@ -304,7 +303,7 @@
                      (t (error "?"))))
 
                  (copy-history (count offset)
-                   (declare (type (and fixnum unsigned-byte) count offset))
+                   (declare (type non-negative-fixnum count offset))
                    (let* ((d output-offset)
                           (s (- d offset))
                           (e (length output-buffer))

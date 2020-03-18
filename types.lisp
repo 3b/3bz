@@ -6,3 +6,6 @@
 (deftype ht-node-array-type () `(simple-array ht-node-type (,+max-tree-size+)))
 
 (deftype code-table-type () '(simple-array (unsigned-byte 4) 1))
+
+;; mezzano likes (integer 0 m-p-f) better than (and fixnum unsigned-byte)
+(deftype non-negative-fixnum () `(integer 0 ,most-positive-fixnum))

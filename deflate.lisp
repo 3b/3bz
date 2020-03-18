@@ -198,7 +198,7 @@
                      (declare (type (mod 9) octets)
                               (type (unsigned-byte 6) bits-remaining)
                               (type (unsigned-byte #+64-bit-cpu 64 #-64-bit-cpu 32) input))
-                     (let* ((bits (* octets #+64-bit-cpu 8 #-64-bit-cpu 4))
+                     (let* ((bits (* octets 8))
                             (total (+ bits-remaining bits)))
                        ;; didn't read enough bits, save any bits we
                        ;; did get for later, then fail

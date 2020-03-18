@@ -3,6 +3,7 @@
   :depends-on (alexandria
                (:feature (:not :mezzano) cffi)
                (:feature (:not :mezzano) mmap)
+               trivial-features
                nibbles)
   :serial t
   :license "MIT"

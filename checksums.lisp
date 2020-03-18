@@ -63,7 +63,8 @@
       (values s1 s2))))
 
 ;; use fixnum version elsewhere
-#- (and sbcl x86-64)
+;; fastest on mezzano, ccl64
+#- (or (and sbcl x86-64))
 (progn
   (eval-when (:compile-toplevel :load-toplevel :execute)
     (defconstant +accumulate-count+

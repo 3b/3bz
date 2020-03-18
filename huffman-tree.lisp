@@ -83,17 +83,17 @@
                        :initial-element (ht-invalid-node))
      :type ht-node-array-type))
   (defmethod make-load-form ((object huffman-tree) &optional environment)
-    (make-load-form-saving-slots object :environment environment)))
+    (make-load-form-saving-slots object :environment environment))
 
-(defparameter *fixed-lit/length-table*
-  (concatenate 'code-table-type
-               (make-array (1+ (- 143 0)) :initial-element 8)
-               (make-array (1+ (- 255 144)) :initial-element 9)
-               (make-array (1+ (- 279 256)) :initial-element 7)
-               (make-array (1+ (- 287 280)) :initial-element 8)))
+  (defparameter *fixed-lit/length-table*
+    (concatenate 'code-table-type
+                 (make-array (1+ (- 143 0)) :initial-element 8)
+                 (make-array (1+ (- 255 144)) :initial-element 9)
+                 (make-array (1+ (- 279 256)) :initial-element 7)
+                 (make-array (1+ (- 287 280)) :initial-element 8)))
 
-(defparameter *fixed-dist-table*
-  (coerce (make-array 32 :initial-element 5) 'code-table-type))
+  (defparameter *fixed-dist-table*
+    (coerce (make-array 32 :initial-element 5) 'code-table-type)))
 
 (defun build-tree-part (tree tree-offset table type start end
                         scratch
@@ -338,11 +338,15 @@
   (defconstant +static-huffman-tree/dist+ (if (boundp '+static-huffman-tree/dist+)
                                               +static-huffman-tree/dist+
                                               (make-huffman-tree))))
-
-(build-trees +static-huffman-tree/len+
-             +static-huffman-tree/dist+
-             *fixed-lit/length-table* *fixed-dist-table*)
+#-ccl
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (alexandria:define-constant +static-huffman-trees+
       (cons +static-huffman-tree/len+ +static-huffman-tree/dist+)
     :test 'equalp))
+#+ccl
+(defparameter +static-huffman-trees+
+      (cons +static-huffman-tree/len+ +static-huffman-tree/dist+))
+
+(build-trees +static-huffman-tree/len+
+             +static-huffman-tree/dist+
+             *fixed-lit/length-table* *fixed-dist-table*)

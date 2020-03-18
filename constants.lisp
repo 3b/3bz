@@ -1,6 +1,7 @@
 (in-package 3bz)
 
-#+(or x86-64 ppc64 sparc64 hppa64)
+#+ (and (or x86-64 ppc64 sparc64 hppa64)
+        (not ccl))
 (pushnew :64-bit-cpu *features*)
 
 ;; libz says these are enough entries for zlib as specified

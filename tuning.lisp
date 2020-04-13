@@ -10,7 +10,7 @@
 (defun use-ub64 ()
   '(:or)
   #+ (and (or x86-64 ppc64 sparc64 hppa64)
-          (not ccl))
+          (not ccl abcl))
   '(:and))
 
 ;;; similarly, adler32 checksum accumulates as many bytes as possible
@@ -24,8 +24,10 @@
            ;; for now, just using fixnum elsewhere until there are
            ;; proper benchmarks. not sure if ub32 is faster than
            ;; fixnum anywhere, or if fixnum is good enough
-           #- (and sbcl x86-64)
+           #- (or abcl (and sbcl x86-64))
            :fixnum
+           #+ abcl
+           :ub32
            )
       '(:and)
       '(:or)))

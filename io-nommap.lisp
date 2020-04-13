@@ -1,6 +1,7 @@
 (in-package #:3bz)
-;;; stubs of mmap/pointer routines to allow compilation on mezzano
-#-mezzano (error "this code assume mezzano, patches welcome if some other OS needs it")
+;;; stubs of mmap/pointer routines to allow compilation on mezzano/abcl
+#- (or abcl mezzano)
+(error "this code assume mezzano/abcl, patches welcome if some other OS needs it")
 
 ;; we restrict size of these types a bit more on 64 bit platforms to
 ;; ensure intermediate results stay in reasonable range for

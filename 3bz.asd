@@ -1,8 +1,8 @@
 (defsystem :3bz
   :description "deflate decompressor"
   :depends-on (alexandria
-               (:feature (:not :mezzano) cffi)
-               (:feature (:not :mezzano) mmap)
+               (:feature (:and (:not :mezzano) (:not :abcl)) cffi)
+               (:feature (:and (:not :mezzano) (:not :abcl)) mmap)
                trivial-features
                nibbles)
   :serial t
@@ -16,8 +16,8 @@
    (:file "types")
    (:file "huffman-tree")
    (:file "io-common")
-   (:file "io-nommap" :if-feature :mezzano)
-   (:file "io-mmap" :if-feature (:not :mezzano))
+   (:file "io-nommap" :if-feature (:or :mezzano :abcl))
+   (:file "io-mmap" :if-feature (:and (:not :mezzano) (:not :abcl)))
    (:file "io")
    (:file "deflate")
    (:file "checksums")

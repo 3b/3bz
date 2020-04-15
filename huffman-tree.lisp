@@ -74,7 +74,7 @@
   (defun ht-invalid-node () #xffff)
   (defun ht-end-node () #x0001)
 
-  (declaim (inline ht-max-bits ht-start-bits))
+  #-cmucl(declaim (inline ht-max-bits ht-start-bits))
   (defstruct (huffman-tree (:conc-name ht-))
     (start-bits 0 :type ht-bit-count-type)
     (max-bits 0 :type (mod 29))

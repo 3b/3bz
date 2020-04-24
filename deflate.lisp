@@ -670,7 +670,7 @@
                     (ecase type
                       (#.+ht-len/dist+
                        ;; got a length code, read dist and copy
-                       (let ((bytes-to-copy (+ extra (aref bases code))))
+                       (let ((octets (+ extra (aref bases code))))
                          ;; try to read dist. decode-huffman* will
                          ;; push BITS back onto temp before calling
                          ;; EOI if it fails, so we can restart state
@@ -679,8 +679,7 @@
                              (decode-huffman (cdr ht)
                                              old-bits old-count)
                            ;; got dist code
-                           (copy-history bytes-to-copy (+ (aref bases dist)
-                                                          extra)))))
+                           (copy-history octets (+ (aref bases dist) extra)))))
                       (#.+ht-literal+
                        (when (>= output-offset (length output-buffer))
                          (setf current-state :out-byte)

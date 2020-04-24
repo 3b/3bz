@@ -10,7 +10,7 @@
 (defun use-ub64 ()
   '(:or)
   #+ (and (or x86-64 ppc64 sparc64 hppa64)
-          (not (or ccl abcl)))
+          (not (or ecl ccl abcl)))
   '(:and))
 
 ;;; similarly, adler32 checksum accumulates as many bytes as possible

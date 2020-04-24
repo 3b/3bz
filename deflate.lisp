@@ -194,10 +194,12 @@
                    ;; try to read (up to) 64 bits from input
                    ;; (returns 0 in OCTETS if no more input)
                    (multiple-value-bind (input octets)
-                       #+#.(3bz::use-ub64) (word64) #-#.(3bz::use-ub64) (word32)
+                       ;; some callers need more than 32 bits at once,
+                       ;; so no use-ub64 here for now
+                       (word64)
                      (declare (type (mod 9) octets)
                               (type (unsigned-byte 6) bits-remaining)
-                              (type (unsigned-byte #+#.(3bz::use-ub64) 64 #-#.(3bz::use-ub64) 32) input))
+                              (type (unsigned-byte 64) input))
                      (let* ((bits (* octets 8))
                             (total (+ bits-remaining bits)))
                        ;; didn't read enough bits, save any bits we

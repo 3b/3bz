@@ -8,7 +8,7 @@
 #++(dump-tree +static-huffman-tree+)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar %static-huffman-tree/len% (make-huffman-tree))
-  (defconstant %static-huffman-tree/dist% (make-huffman-tree) )
+  (defvar %static-huffman-tree/dist% (make-huffman-tree) )
 
   (build-trees %static-huffman-tree/len%
                %static-huffman-tree/dist%

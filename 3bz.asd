@@ -15,6 +15,7 @@
    (:file "constants")
    (:file "types")
    (:file "huffman-tree")
+   (:file "ht-constants")
    (:file "io-common")
    (:file "io-nommap" :if-feature (:or :mezzano :abcl))
    (:file "io-mmap" :if-feature (:and (:not :mezzano) (:not :abcl)))

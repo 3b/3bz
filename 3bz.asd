@@ -4,7 +4,8 @@
                (:feature (:and (:not :mezzano) (:not :abcl)) cffi)
                (:feature (:and (:not :mezzano) (:not :abcl)) mmap)
                trivial-features
-               nibbles)
+               nibbles
+               babel)
   :serial t
   :license "MIT"
   :author "Bart Botta <00003b at gmail.com>"

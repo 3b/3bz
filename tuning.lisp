@@ -9,7 +9,8 @@
 ;;; where possible
 (defun use-ub64 ()
   '(:or)
-  #+ (and 64-bit (or sbcl mezzano))
+  ;; on mezzano, ub64 is better on some files, worse on others, so leaving off for now
+  #+ (or (and 64-bit sbcl))
   '(:and))
 
 ;;; similarly, adler32 checksum accumulates as many bytes as possible
@@ -17,13 +18,13 @@
 ;;; versions of adler32 code depending on which is fastest
 (defun use-adler32 (version)
   (if (eql version
-           ;; ub64 is fastest on 64bit sbcl
-           #+ (and sbcl x86-64)
+           ;; ub64 is fastest on 64bit sbcl, and seems better on mezzano too now
+           #+ (or mezzano (and sbcl x86-64))
            :ub64
            ;; for now, just using fixnum elsewhere until there are
            ;; proper benchmarks. not sure if ub32 is faster than
            ;; fixnum anywhere, or if fixnum is good enough
-           #- (or abcl (and sbcl x86-64))
+           #- (or mezzano abcl (and sbcl x86-64))
            :fixnum
            #+ abcl
            :ub32
@@ -35,7 +36,7 @@
 ;; todo: set this for more combinations of cpu/implementation once
 ;; there are benchmarks
 (defconstant +adler32-unroll+
-  #+mezzano 5
+  #+mezzano 16
   #+sbcl 32
   #- (or sbcl mezzano) 8)
 

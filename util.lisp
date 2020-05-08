@@ -48,7 +48,11 @@
   ;; a few places we already checked something will be a fixnum (for
   ;; example an array index in a loop), so tell the compiler it doesn't
   ;; need to check for bignums
-  `(ldb (byte #. (integer-length most-positive-fixnum) 0) ,x))
+  #-mezzano
+  `(ldb (byte #. (integer-length most-positive-fixnum) 0) ,x)
+  #+mezzano
+  `(locally (declare (optimize speed (safety 0)))
+     (the fixnum ,x)))
 
 (declaim (type (simple-array (unsigned-byte 15) (32768)) *bit-rev-table*))
 (defparameter *bit-rev-table*
@@ -61,3 +65,23 @@
 (defun bit-rev (x bits)
   (declare (type (unsigned-byte 15) x))
   (ldb (byte bits (- 15 bits)) (aref *bit-rev-table* x)))
+
+
+;; some wrappers for handling fast math when we know types and ranges
+(defmacro ub64+ (a b)
+  #- (or mezzano sbcl)
+  `(the (unsigned-byte 64) (+ ,a ,b))
+  #+mezzano
+  `(locally (declare (optimize speed (safety 0)))
+     (the (unsigned-byte 64) (+ ,a ,b)))
+  #+sbcl
+  `(ldb (byte 64 0) (+ ,a ,b)))
+
+(defmacro fixnum+ (a b)
+  #- (or mezzano sbcl)
+  `(the (fixnum) (+ ,a ,b))
+  #+mezzano
+  `(locally (declare (optimize speed (safety 0)))
+     (the (fixnum) (+ ,a ,b)))
+  #+sbcl
+  `(+ ,a ,b))

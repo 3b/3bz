@@ -27,32 +27,34 @@
            (* unroll (floor 380368439 unroll)))
          (s1 s1)
          (s2 s2))
-    (declare (type (unsigned-byte 64) s1 s2))
+    (declare (type (unsigned-byte 64) s1 s2)
+             (fixnum chunk-size))
     (assert (<= end (length buf)))
     (macrolet ((a (i)
                  `(progn
-                    (incf (ldb (byte 64 0) s1)
-                          (locally
-                              (declare (optimize (safety 0)))
-                            (aref buf ,i)))
-                    (incf (ldb (byte 64 0) s2) s1)))
+                    (setf s1 (ub64+ s1
+                                    (locally
+                                        (declare (optimize (safety 0)))
+                                      (aref buf (the fixnum ,i)))))
+                    (setf s2 (ub64+ s2 s1))))
                (unroll (n)
                  `(progn
                     ,@(loop for x below n
-                            collect `(a (+ i ,x))))))
-      (loop with i fixnum = 0
-            while (> (- end i) #1#)
-            for c fixnum = (+ i (min (* #1# (floor end #1#))
-                                     chunk-size))
+                            collect `(a (fixnum+ i ,x))))))
+      (loop with i of-type fixnum = 0
+            for rem fixnum = (the fixnum (- end i))
+            for c fixnum = (fixnum+ i (min (* #1# (floor rem #1#))
+                                           chunk-size))
+            while (> rem #1#)
             do (loop while (< i c)
                      do (unroll #1#)
                         (locally (declare (optimize (safety 0)))
-                          (incf i #1#)))
+                          (setf i  (fixnum+ i #1#))))
                (setf s1 (mod s1 +adler32-prime+)
                      s2 (mod s2 +adler32-prime+))
             finally (progn
                       (assert (<= i end))
-                      (loop for i from i below end
+                      (loop for i fixnum from i below end
                             do (a i))))
       (setf s1 (mod s1 +adler32-prime+)
             s2 (mod s2 +adler32-prime+)))
@@ -89,29 +91,33 @@
             (* unroll (floor +accumulate-count+ unroll)))
           (s1 s1)
           (s2 s2))
-     (declare (type non-negative-fixnum s1 s2))
+     (declare (type non-negative-fixnum s1 s2 chunk-size))
      (assert (<= end (length buf)))
      (macrolet ((a (i)
                   `(progn
-                    (setf s1 (the fixnum (+ s1 (aref buf (the fixnum ,i)))))
+                    (setf s1 (the fixnum (+ s1
+                                            (the octet (aref buf (the fixnum ,i))))))
                     (setf s2 (the fixnum (+ s2 s1)))))
                 (unroll (n)
                   `(progn
                      ,@(loop for x below n
                              collect `(a (+ i ,x))))))
        (loop with i of-type non-negative-fixnum = 0
-             while (> (- end i) #1#)
-             for c fixnum = (+ i (min (* #1# (floor (- end i) #1#))
-                                      chunk-size))
+             for rem fixnum = (the fixnum (- end i))
+             for c fixnum = (the fixnum (+ i
+                                           (the fixnum
+                                                (min (* #1# (floor rem #1#))
+                                                     chunk-size))))
+             while (> rem #1#)
              do (loop while (< i c)
                       do (unroll #1#)
                          (locally (declare (optimize (safety 0)))
-                           (incf i #1#)))
+                           (setf i (the fixnum (+ i #1#)))))
                 (setf s1 (mod s1 +adler32-prime+)
                       s2 (mod s2 +adler32-prime+))
              finally (progn
                        (assert (<= i end))
-                       (loop for i from i below end
+                       (loop for i fixnum from i below end
                              do (a i))))
        (setf s1 (mod s1 +adler32-prime+)
              s2 (mod s2 +adler32-prime+)))

@@ -159,7 +159,7 @@
                    (multiple-value-bind (input octets)
                        (word32)
                      (declare (type (mod 5) octets)
-                              (type (unsigned-byte 32 input)))
+                              (type (unsigned-byte 32) input))
                      (setf bits-remaining (* 4 octets)
                            partial-bits input)))
                  (%fill-bits32 (n)

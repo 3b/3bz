@@ -20,7 +20,7 @@
   (setf (ds-output-offset state) 0)
   (setf (ds-output-overflow state) nil))
 
-(defun decompress-vector (compressed &key (format :zlib) output)
+(defun decompress-vector (compressed &key (format :zlib) (start 0) (end (length compressed)) output)
   "decompress octet-vector COMPRESSED using
 FORMAT (:deflate,:zlib,:gzip). If output is supplied, it should be an
 octet-vector large enough to hold entire uncompressed output.
@@ -32,7 +32,7 @@ of octets decompressed."
                  (:gzip (make-gzip-state))
                  (:zlib (make-zlib-state))
                  (:deflate (make-deflate-state))))
-        (rc (make-octet-vector-context compressed)))
+        (rc (make-octet-vector-context compressed :start start :end end)))
     (if output
         (progn
           (setf (ds-output-buffer state) output)
@@ -47,7 +47,7 @@ of octets decompressed."
                 (t (error "?"))))
             (values output c)))
         (progn
-          (loop for out = (make-array (min (length compressed) 32768)
+          (loop for out = (make-array (min (- end start) 32768)
                                       :element-type 'octet)
                   then (make-array (* 2 (length out)) :element-type 'octet)
                 do (replace-output-buffer state out)

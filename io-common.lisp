@@ -37,7 +37,7 @@
   ((octet-vector :reader octet-vector :initarg :octet-vector)
    (boxes :reader boxes :initarg :boxes)))
 
-(defun make-octet-vector-context (vector &key (start 0) (offset 0)
+(defun make-octet-vector-context (vector &key (start 0) (offset start)
                                            (end (length vector)))
   (make-instance 'octet-vector-context
                  :octet-vector vector

@@ -8,17 +8,19 @@
      (defstruct ,name-and-options
        ,@slots)
      (eval-when (:compile-toplevel :load-toplevel :execute)
-       ,(destructuring-bind (name &rest options)
-            (alexandria:ensure-list name-and-options)
-          (let ((conc-name (cadr (assoc :conc-name options))))
-            (unless conc-name
-              (setf conc-name (format nil "~a" name)))
-            (flet ((accessor (slot)
-                     (intern (format nil "~a~a" conc-name slot))))
-              `(setf (gethash ',NAME *cached-struct-defs*)
-                     ',(loop for (slot init . keys) in slots
-                             for type = (getf keys :type)
-                             collect (list slot (accessor slot) type)))))))))
+       ,(with-standard-io-syntax
+          (destructuring-bind (name &rest options)
+              (alexandria:ensure-list name-and-options)
+            (let ((conc-name (cadr (assoc :conc-name options))))
+              (unless conc-name
+                (setf conc-name (format nil "~a" name)))
+              (flet ((accessor (slot)
+                       (intern (format nil "~a~a" conc-name slot)
+                               (find-package :3bz))))
+                `(setf (gethash ',NAME *cached-struct-defs*)
+                       ',(loop for (slot init . keys) in slots
+                               for type = (getf keys :type)
+                               collect (list slot (accessor slot) type))))))))))
 
 (defmacro with-cached-state ((struct type save-state-fun &body vars)
                              &body body)

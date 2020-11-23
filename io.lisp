@@ -107,23 +107,25 @@
 
 (defmacro defun-with-reader-contexts (base-name lambda-list (in) &body body)
   `(progn
-     ,@(loop for cc in '(vector stream pointer)
-             for w = (find-symbol (format nil "~a-~a-~a" 'with cc 'context)
-                                  (find-package :3bz))
-             for n = (intern (format nil "~a/~a" base-name cc)
-                             (find-package :3bz))
-             collect `(defun ,n ,lambda-list
-                        (,w (,in)
-                            (let ()
-                              ,@body))))
+     ,@(with-standard-io-syntax
+         (loop for cc in '(vector stream pointer)
+               for w = (find-symbol (format nil "~a-~a-~a" 'with cc 'context)
+                                    (find-package :3bz))
+               for n = (intern (format nil "~a/~a" base-name cc)
+                               (find-package :3bz))
+               collect `(defun ,n ,lambda-list
+                          (,w (,in)
+                              (let ()
+                                ,@body)))))
      (defun ,base-name ,lambda-list
        (etypecase ,in
-         ,@(loop for cc in '(vector stream pointer)
-                 for ct = (find-symbol (format nil "~a-~a-~a" 'octet cc 'context)
-                                       (find-package :3bz))
-                 for n = (find-symbol (format nil "~a/~a" base-name cc)
-                                      (find-package :3bz))
-                 collect `(,ct (,n ,@lambda-list)))))))
+         ,@(with-standard-io-syntax
+             (loop for cc in '(vector stream pointer)
+                   for ct = (find-symbol (format nil "~a-~a-~a" 'octet cc 'context)
+                                         (find-package :3bz))
+                   for n = (find-symbol (format nil "~a/~a" base-name cc)
+                                        (find-package :3bz))
+                   collect `(,ct (,n ,@lambda-list))))))))
 
 (defmacro with-reader-contexts ((context) &body body)
   `(etypecase ,context

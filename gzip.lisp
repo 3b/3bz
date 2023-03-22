@@ -101,16 +101,15 @@
                                     (ash (header-byte) 8)
                                     (ash (header-byte) 16)
                                     (ash (header-byte) 24))))
-                   len
                    #++(format t "len = ~8,'0x ?= ~8,'0x~%"
                               len output-offset)
-                   (setf gzip-state nil))))
+                   len)))
         (declare (inline %fill-bits32 %bits byte-align)
                  (optimize (speed 1)))
         (setf input-underrun nil)
         (loop
-          while gzip-state
-          do (case gzip-state
+          until (or finished output-overflow input-underrun)
+          do (ecase gzip-state
                (:header ;; magic #
                 (when (and (< bits-remaining 16)
                            (not (%fill-bits32 16)))
@@ -264,22 +263,25 @@
                 #++(format t "  name: ~s~%" name)
                 #++(format t "  comment: ~s~%" comment)
                 #++(format t "  extra: ~s~%" extra)
-                (setf gzip-state nil))
+                (setf gzip-state :deflate))
+               (:deflate
+                (decompress-deflate read-context state)
+                (when (or finished output-overflow)
+                  (update-checksum))
+                (when finished
+                  (byte-align)
+                  (setf gzip-state :final-crc)
+                  (setf finished nil)))
                (:final-crc
                 (crc))
                (:final-len
                 (len)
-                (return-from decompress-gzip output-offset)))
-             (unless gzip-state
-               (decompress-deflate read-context state)
-               (when (or finished output-overflow)
-                 (update-checksum))
-               (when finished
-                 (byte-align)
-                 (setf gzip-state :final-crc)
-                 (setf finished nil))))
-        (when (eql :final-crc gzip-state)
-          (crc))
-        (when (eql :final-len gzip-state)
-          (len))
+                (setf finished t)
+                ;; not a valid state, so calling this again after it
+                ;; finishes is an error. If it were valid and just
+                ;; ignored, caller would probably need to be checking
+                ;; state before calling anyway to avoid an infinite
+                ;; loop, so an error seems like the safer choice here.
+                (setf gzip-state :done)
+                (loop-finish))))
         output-offset))))

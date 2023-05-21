@@ -236,6 +236,9 @@
                    nil)
 
                  (copy-byte-or-fail ()
+                   (unless (< output-offset (length output-buffer))
+                     (setf output-overflow t)
+                     (eoo))
                    (out-byte (bits 8)))
 
                  (%copy-history (from to s d e count total-count offset)
@@ -535,10 +538,7 @@
               :copy-block
               (loop while (and (plusp bits-remaining)
                                (plusp bytes-to-copy))
-                    do (unless (< output-offset (length output-buffer))
-                         (setf output-overflow t)
-                         (eoo))
-                       (out-byte (bits 8))
+                    do (copy-byte-or-fail)
                        (decf bytes-to-copy))
               (loop with e = (- (length output-buffer) 8)
                     while (and (> bytes-to-copy 8)
@@ -568,10 +568,7 @@
                                      (decf bytes-to-copy)))
                            (t (eoo)))))
               (loop while (plusp bytes-to-copy)
-                    do (unless (< output-offset (length output-buffer))
-                         (setf output-overflow t)
-                         (eoo))
-                       (copy-byte-or-fail)
+                    do (copy-byte-or-fail)
                        (decf bytes-to-copy))
               (next-state :block-end)
 

@@ -14,8 +14,10 @@
   (push *foo* *3bz*))
 
 (defvar *zzz* nil)
+(defparameter *bench-test-file* "e:/tmp/t/linux-2.2.26.tar")
+
 (let* ((d (time
-           (alexandria:read-file-into-byte-vector "e:/tmp/t/linux-2.2.26.tar"))
+           (alexandria:read-file-into-byte-vector *bench-test-file*))
           #++(setf *foo*
                    (time
                     (map-into (make-array (expt 2 24) :element-type 'octet)
@@ -71,14 +73,50 @@
   (fill tmp 0)
   (format t "3bz/stream:~%")
   (flex:with-input-from-sequence (s v)
-    (let ((x (time (decompress (make-instance 'octet-stream-context
-                                              :octet-stream s
-                                              :boxes (make-context-boxes :end (length v)))
+    (let ((x (time (decompress (make-octet-stream-context s
+                                                          :end (length v))
                                (make-deflate-state :output-buffer tmp)))))
       (assert (equalp (if (consp x)
                           (time (apply 'concatenate 'octet-vector x))
                           (subseq tmp 0 x))
                       d))))
+  (fill tmp 0)
+  (format t "3bz/buffered-stream:~%")
+  (flex:with-input-from-sequence (s v)
+    (let ((x (time (decompress (make-octet-stream-context s
+                                                          :end (length v)
+                                                          :buffer-size (* 8 1024))
+                               (make-deflate-state :output-buffer tmp)))))
+      (assert (equalp (if (consp x)
+                          (time (apply 'concatenate 'octet-vector x))
+                          (subseq tmp 0 x))
+                      d))))
+
+  (fill tmp 0)
+  (format t "3bz/file-stream:~%")
+  (uiop:with-temporary-file (:stream out-stream :pathname pn :element-type '(unsigned-byte 8))
+    (write-sequence v out-stream)
+    :close-stream
+    (with-open-file (s pn :element-type '(unsigned-byte 8))
+      (let ((x (time (decompress (make-octet-stream-context s)
+                                 (make-deflate-state :output-buffer tmp)))))
+        (assert (equalp (if (consp x)
+                            (time (apply 'concatenate 'octet-vector x))
+                            (subseq tmp 0 x))
+                        d)))))
+  (fill tmp 0)
+  (format t "3bz/buffered-file-stream:~%")
+  (uiop:with-temporary-file (:stream out-stream :pathname pn :element-type '(unsigned-byte 8))
+    (write-sequence v out-stream)
+    :close-stream
+    (with-open-file (s pn :element-type '(unsigned-byte 8))
+      (let ((x (time (decompress (make-octet-stream-context s
+                                                            :buffer-size (* 8 1024))
+                                 (make-deflate-state :output-buffer tmp)))))
+        (assert (equalp (if (consp x)
+                            (time (apply 'concatenate 'octet-vector x))
+                            (subseq tmp 0 x))
+                        d)))))
 
   (fill tmp 0)
   (format t "gz:~%")
@@ -88,7 +126,7 @@
   nil)
 
 (let* ((d (time
-           (alexandria:read-file-into-byte-vector "e:/tmp/t/linux-2.2.26.tar")))
+           (alexandria:read-file-into-byte-vector *bench-test-file*)))
        (tmp (make-array (length d) :element-type 'octet
                                    :initial-element 0))
        (v (or *zzz*

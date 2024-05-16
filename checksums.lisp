@@ -146,14 +146,15 @@
                             collect `(a (+ i ,x))))))
       (loop with i fixnum = 0
             while (> (- end i) #1#)
-            for c fixnum = (+ i (min (* #1# (floor (- end i) #1#))
-                                      chunk-size))
-            do (loop while (< i c)
-                     do (unroll #1#)
-                        (locally (declare (optimize (safety 0)))
-                          (incf i #1#)))
-               (setf s1 (mod s1 +adler32-prime+)
-                     s2 (mod s2 +adler32-prime+))
+            do (let ((c (+ i (min (* #1# (floor (- end i) #1#))
+                                  chunk-size))))
+                 (declare (fixnum c))
+                 (loop while (< i c)
+                       do (unroll #1#)
+                          (locally (declare (optimize (safety 0)))
+                            (incf i #1#)))
+                 (setf s1 (mod s1 +adler32-prime+)
+                       s2 (mod s2 +adler32-prime+)))
             finally (progn
                       (assert (<= i end))
                       (loop for i from i below end

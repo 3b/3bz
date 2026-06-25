@@ -566,7 +566,7 @@
                             (loop for i below c
                                   do (out-byte (ldb (byte 8 (* i 8)) w))
                                      (decf bytes-to-copy)))
-                           (t (eoo)))))
+                           (t (eoi)))))
               (loop while (plusp bytes-to-copy)
                     do (copy-byte-or-fail)
                        (decf bytes-to-copy))

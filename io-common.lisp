@@ -48,12 +48,22 @@
   ((octet-stream :reader octet-stream :initarg :octet-stream)
    (boxes :reader boxes :initarg :boxes)))
 
+(defclass octet-buffered-stream-context (octet-stream-context)
+  ((buffer-size :reader buffer-size :initarg :buffer-size :initform (* 8 1024))))
+
 (defun make-octet-stream-context (file-stream &key (start 0) (offset 0)
-                                                (end (file-length file-stream)))
-  (make-instance 'octet-stream-context
-                 :octet-stream file-stream
-                 :boxes (make-context-boxes
-                         :start start :offset offset :end end)))
+                                                (end (file-length file-stream))
+                                                buffer-size)
+  (if (null buffer-size)
+      (make-instance 'octet-stream-context
+                     :octet-stream file-stream
+                     :boxes (make-context-boxes
+                             :start start :offset offset :end end))
+      (make-instance 'octet-buffered-stream-context
+                     :octet-stream file-stream
+                     :boxes (make-context-boxes
+                             :start start :offset offset :end end)
+                     :buffer-size buffer-size)))
 
 ;; hack to allow storing parts of a file to use as context later. call
 ;; before using context

@@ -9,8 +9,11 @@ mmap and similar, etc), and from CL octet vectors and streams.
 ### Still somewhat WIP, but approaching usability.
 
 Performance for vectors/pointers is somewhere between FFI to libz and chipz,
-still needs some low-level optimization of copy routines and checksums.
-Stream API is very slow, and may be replaced at some point.
+still needs some low-level optimization of copy routines and checksums. There
+are two variants of the stream API. The default is safe (will never read beyond
+the end of the compressed data, but is very slow. The second (opt-in) variant
+is much faster, but requires the length of the compressed data is known a
+priori.
 
 API isn't completely stable yet, needs some actual use to figure out
 the details.
@@ -58,7 +61,12 @@ to specify valid region within source. For FFI pointers, use
 `(with-octet-pointer (octet-pointer ffi-pointer size) ...)` to wrap a
 raw pointer + size into `octet-pointer` to pass to
 `make-octet-pointer-context`. (If you need indefinite scope pointers,
-file an issue so support that can be added to API.)
+file an issue so support that can be added to API.) For stream contexts, you
+can opt-in to buffered reads (increasing performance) by specifying
+`:buffer-size`. If you provide `:buffer-size`, the `:end` argument *must*
+correctly specify the end of the the compressed data, otherwise more data may
+be read from the stream than you intended or decompression may block waiting
+for an EOF.
 
 * step 3: decompress
 
@@ -74,8 +82,6 @@ file an issue so support that can be added to API.)
 
 
 ##### performance notes:
-
-* Streams API is currently *very* slow, and will probably be rewritten at some point.
 
 * Output in small pieces is slow:
 

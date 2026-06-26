@@ -103,12 +103,88 @@
                                      (values ,result ,available))))))))
              ,@body))))))
 
+(defmacro with-buffered-stream-context ((context) &body body)
+  (with-gensyms (boxes stream vector vector-pos vector-end buffer-size)
+    (once-only (context)
+      `(let* ((,boxes (boxes ,context))
+              (,stream (octet-stream ,context))
+              (,buffer-size (buffer-size ,context))
+              (,vector (make-array ,buffer-size
+                                   :element-type '(unsigned-byte 8)))
+              (,vector-end 0)
+              (,vector-pos 0))
+         (declare (optimize speed)
+                  (ignorable ,stream ,boxes)
+                  (type context-boxes ,boxes)
+                  (type size-t ,buffer-size ,vector-pos ,vector-end))
+         (assert (valid-octet-stream ,stream))
+         (context-common (,boxes)
+           (macrolet ((ensure-valid ()
+                        `(when (and (= ,',vector-end ,',vector-pos) (plusp (octets-left)))
+                           (setf ,',vector-end (read-sequence ,',vector ,',stream
+                                                              :end (min ,',buffer-size (- (end) (pos))))
+                                 ,',vector-pos 0)))
+                      (word64 ()
+                        (with-gensyms (available result locally-available)
+                          `(progn
+                             (ensure-valid)
+                             (let ((,available (octets-left))
+                                   (,locally-available (- ,',vector-end ,',vector-pos)))
+                               (declare (type offset-t ,locally-available))
+                               (if (and (>= ,available 8)
+                                        (>= ,locally-available 8))
+                                   (let ((,result (ub64ref/le
+                                                   ,',vector ,',vector-pos)))
+                                     (incf (pos) 8)
+                                     (incf ,',vector-pos 8)
+                                     (values ,result 8))
+                                   (let ((,result 0))
+                                     (loop
+                                       for i fixnum below (min 8 ,available)
+                                       do (ensure-valid)
+                                          (setf ,result
+                                                (ldb (byte 64 0)
+                                                     (logior
+                                                      ,result
+                                                      (ash
+                                                       (aref ,',vector
+                                                             (+ ,',vector-pos i))
+                                                       (* i 8)))))
+                                          (incf ,',vector-pos))
+                                     (incf (pos) ,available)
+                                     (values ,result ,available)))))))
+                      (word32 ()
+                        (with-gensyms (available result)
+                          `(let ((,available (octets-left)))
+                             (ensure-valid)
+                             (if (>= ,available 4)
+                                 (let ((,result (ub32ref/le
+                                                 ,',vector ,',vector-pos)))
+                                   (incf (pos) 4)
+                                   (incf ,',vector-pos 4)
+                                   (values ,result 4))
+                                 (let ((,result 0))
+                                   (loop
+                                     for i of-type (unsigned-byte 2) below (min 4 ,available)
+                                     do (setf ,result
+                                              (ldb (byte 32 0)
+                                                   (logior
+                                                    ,result
+                                                    (ash
+                                                     (aref ,',vector
+                                                           (+ ,',vector-pos i))
+                                                     (* i 8))))))
+                                   (incf (pos) ,available)
+                                   (incf ,',vector-pos ,available)
+                                   (values ,result ,available)))))))
+             ,@body))))))
+
 
 
 (defmacro defun-with-reader-contexts (base-name lambda-list (in) &body body)
   `(progn
      ,@(with-standard-io-syntax
-         (loop for cc in '(vector stream pointer)
+         (loop for cc in '(vector buffered-stream stream pointer)
                for w = (find-symbol (format nil "~a-~a-~a" 'with cc 'context)
                                     (find-package :3bz))
                for n = (intern (format nil "~a/~a" base-name cc)
@@ -120,7 +196,7 @@
      (defun ,base-name ,lambda-list
        (etypecase ,in
          ,@(with-standard-io-syntax
-             (loop for cc in '(vector stream pointer)
+             (loop for cc in '(vector buffered-stream stream pointer)
                    for ct = (find-symbol (format nil "~a-~a-~a" 'octet cc 'context)
                                          (find-package :3bz))
                    for n = (find-symbol (format nil "~a/~a" base-name cc)
@@ -134,6 +210,9 @@
         ,@body))
      (octet-pointer-context
       (with-pointer-context (,context)
+        ,@body))
+     (octet-buffered-stream-context
+      (with-buffered-stream-context (,context)
         ,@body))
      (octet-stream-context
       (with-stream-context (,context)
